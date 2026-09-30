@@ -5,9 +5,11 @@
   · 해시는 16자 (HMAC-SHA256 앞부분). 민원 행과는 연결하지 않는다.
   · IP 를 알 수 없으면 '' (출처 구분 없음 = 예전처럼 전체 공용) 이다.
 
-프록시: webapi 앞에 vite 프록시(같은 PC)가 있으면 webapi 가 보는 접속 주소는 127.0.0.1 이다.
-그래서 접속자가 루프백(127.0.0.1·::1)일 때만 X-Forwarded-For 의 첫 값을 믿는다. 밖에서 온 요청이 이 헤더를
-직접 붙여도 루프백이 아니면 무시한다.
+프록시: webapi 앞에 vite 프록시(같은 PC, xfwd)가 있으면 webapi 가 보는 접속 주소는 127.0.0.1 이다.
+그래서 접속자가 **믿는 프록시(루프백 127.0.0.1·::1)일 때만** X-Forwarded-For 를 본다. 밖에서 온 요청이 이 헤더를
+직접 붙여도 루프백이 아니면 무시하고 소켓 주소를 그대로 쓴다.
+그때도 **맨 오른쪽(마지막으로 붙은) 값**만 쓴다 (D5-43). 프록시는 자기가 본 접속 주소를 헤더 오른쪽에 덧붙이는데,
+왼쪽 값은 접속한 쪽이 직접 넣어 보낸 것일 수 있어 출처를 바꿔 가며 잠금·도배 방지를 피할 수 있다.
 """
 import hashlib
 import hmac
@@ -37,11 +39,11 @@ def source_hash(ip: str | None) -> str:
 
 
 def client_ip(peer: str | None, forwarded_for: str | None = None) -> str | None:
-    """접속 주소. 접속자가 루프백(같은 PC 의 프록시)일 때만 X-Forwarded-For 의 첫 값을 쓴다."""
+    """접속 주소. 접속자가 루프백(같은 PC 의 믿는 프록시)일 때만 X-Forwarded-For 의 **맨 오른쪽 값**을 쓴다."""
     if peer and peer in LOOPBACK and forwarded_for:
-        first = forwarded_for.split(",")[0].strip()
-        if first:
-            return first
+        last = forwarded_for.split(",")[-1].strip()
+        if last:
+            return last
     return peer
 
 

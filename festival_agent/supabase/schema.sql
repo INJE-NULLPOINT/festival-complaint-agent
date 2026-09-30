@@ -267,10 +267,14 @@ begin
   if v_hash is null then
     return '운영자 코드가 필요합니다';            -- 코드를 안 정했으면 전부 거부
   end if;
-  -- 출처별 실패 횟수 (D5-40). PostgREST 가 넘겨 주는 x-forwarded-for 의 첫 값을 '오늘 날짜 + 코드 해시'를 키로 해시한다.
-  -- [확인 필요] Supabase 적용 시 이 헤더가 실제로 오는지 확인. 안 오면 v_src 는 '' — 예전처럼 전체가 한 출처로 묶인다.
+  -- 출처별 실패 횟수 (D5-40). PostgREST 가 넘겨 주는 x-forwarded-for 를 '오늘 날짜 + 코드 해시'를 키로 해시한다.
+  -- 값은 **맨 오른쪽**만 쓴다 (D5-43): 게이트웨이가 마지막에 덧붙인 값이고, 왼쪽은 접속한 쪽이 직접 넣어 보낸 것일 수 있다.
+  -- [확인 필요] Supabase 적용 시 ①이 헤더가 실제로 오는지 ②맨 오른쪽이 게이트웨이가 붙인 접속자 주소인지(앞에 프록시가
+  -- 더 있으면 오른쪽에서 n번째) 확인. 헤더가 없으면 v_src 는 '' — 예전처럼 전체가 한 출처로 묶인다.
   begin
-    v_ip := trim(split_part(coalesce(current_setting('request.headers', true)::json->>'x-forwarded-for', ''), ',', 1));
+    v_ip := trim((string_to_array(coalesce(current_setting('request.headers', true)::json->>'x-forwarded-for', ''), ','))[
+                   greatest(array_length(string_to_array(coalesce(current_setting('request.headers', true)::json->>'x-forwarded-for', ''), ','), 1), 1)]);
+    v_ip := coalesce(v_ip, '');
   exception when others then
     v_ip := '';
   end;

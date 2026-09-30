@@ -1353,7 +1353,14 @@ def test_운영자코드_잠금은_출처별_다른_출처_운영자는_통과()
     assert a and b and a != b and len(a) == 16 and "203.0.113.7" not in a           # 원문 IP 가 아니라 해시
     assert source_id.source_hash("203.0.113.7") == a                                # 같은 날 같은 출처는 같은 값
     assert source_id.source_hash(None) == "" and source_id.client_ip("203.0.113.7", "1.2.3.4") == "203.0.113.7"
-    assert source_id.client_ip("127.0.0.1", "1.2.3.4, 10.0.0.1") == "1.2.3.4"      # 루프백(프록시)일 때만 헤더를 믿는다
+    assert source_id.client_ip("127.0.0.1", "10.0.0.1") == "10.0.0.1"               # 루프백(믿는 프록시)일 때만 헤더를 본다
+    assert source_id.client_ip("127.0.0.1", "1.2.3.4, 10.0.0.1") == "10.0.0.1"      # 맨 오른쪽 값만 (왼쪽은 접속자가 넣은 값)
+    assert source_id.client_ip("::1", "9.9.9.9, 10.0.0.2") == "10.0.0.2"
+    assert source_id.client_ip("203.0.113.7", "1.2.3.4") == "203.0.113.7"           # 믿는 프록시가 아니면 소켓 주소
+    assert source_id.client_ip("127.0.0.1", None) == "127.0.0.1" and source_id.client_ip("127.0.0.1", " ") == "127.0.0.1"
+    # 위조: 왼쪽에 값을 바꿔 붙여도 같은 출처로 센다 / 같은 헤더를 직접 붙인 외부 접속자는 소켓 주소 기준
+    assert source_id.client_source("127.0.0.1", "1.1.1.1, 198.51.100.9") == source_id.client_source("127.0.0.1", "2.2.2.2, 198.51.100.9")
+    assert source_id.client_source("203.0.113.7", "1.1.1.1") == source_id.client_source("203.0.113.7", "2.2.2.2")
     with _temp_db() as db, _AdminCode("tmp-operator-code"):
         def status(code, src):
             try:
@@ -1390,7 +1397,7 @@ def test_운영자코드_잠금은_출처별_다른_출처_운영자는_통과()
         def post(code, xff):
             req = urllib.request.Request(f"http://127.0.0.1:{port}/api/rpc/check_admin", method="POST", data=b"{}",
                                          headers={"Content-Type": "application/json", "X-Admin-Code": code,
-                                                  "X-Forwarded-For": xff})
+                                                  "X-Forwarded-For": xff})   # 프록시처럼 맨 오른쪽에 접속 주소
             try:
                 with urllib.request.urlopen(req, timeout=10) as r:
                     return r.status
@@ -1401,6 +1408,9 @@ def test_운영자코드_잠금은_출처별_다른_출처_운영자는_통과()
                 post("wrong", "203.0.113.7")
             assert post("tmp-operator-code", "203.0.113.7") == 429                      # 방문객 출처는 잠김
             assert post("tmp-operator-code", "198.51.100.9") == 200                     # 운영자 출처는 통과
+            # 방문객이 왼쪽에 다른 값을 붙여 출처를 바꾸려 해도 오른쪽 값(프록시가 본 주소)으로 센다 → 여전히 잠김
+            assert post("tmp-operator-code", "9.9.9.9, 203.0.113.7") == 429
+            assert post("tmp-operator-code", "203.0.113.7, 198.51.100.9") == 200         # 정상 출처(오른쪽)는 그대로 통과
         finally:
             srv.shutdown()
 

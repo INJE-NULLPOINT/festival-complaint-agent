@@ -356,7 +356,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "없는 함수"})
         try:
             args = json.loads(raw or b"{}")
-            src = source_id.client_source(self.client_address[0], self.headers.get("X-Forwarded-For"))
+            src = source_id.client_source(self.client_address[0], ",".join(self.headers.get_all("X-Forwarded-For") or []))   # 헤더가 여러 줄이어도 맨 오른쪽이 마지막
             data = call_rpc(name, args, self.headers.get("X-Admin-Code"), src)
             self._send(200, {"backend": BACKEND, "data": data})
         except admin.AdminError as e:                    # 401 코드 없음·틀림 · 403 코드 미설정 · 429 잠김
