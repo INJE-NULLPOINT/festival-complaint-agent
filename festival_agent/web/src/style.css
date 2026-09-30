@@ -727,7 +727,8 @@ button.rv.open { box-shadow: inset 0 0 0 1px var(--text); }
 .rvp { margin: 8px 0 14px; border: 1px solid var(--text); background: var(--surface); }
 .rvp-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
 .rvp-t { margin: 0; }
-.rvlist { list-style: none; margin: 0; padding: 0; }
+.rvlist { list-style: none; margin: 0; padding: 0; max-height: 480px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }   /* 20건까지 길어지므로 안에서 스크롤 */
+@media (max-width: 559px) { .rvlist { max-height: 60vh; max-height: 60dvh; } }   /* 폰: 화면 높이의 60% (dvh 를 모르는 브라우저는 vh) */
 .rvi { padding: 12px 14px; border-top: 1px solid var(--line); }
 .rvi:first-child { border-top: 0; }
 .rvi.safe { border-left: 4px solid var(--text); }
