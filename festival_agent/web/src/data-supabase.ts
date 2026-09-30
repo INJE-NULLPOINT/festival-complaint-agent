@@ -1,7 +1,7 @@
 // Supabase — anon 키로 읽고, 쓰기는 RPC 3개로만 한다 (supabase/schema.sql).
 import { createClient } from "@supabase/supabase-js";
 import { AdminDenied } from "./admin";
-import type { Backend, FeedItem, ReviewItem, Severity } from "./data";
+import type { Backend, DeletedItem, FeedItem, ReviewItem, Severity } from "./data";
 
 /** classification + feedback 임베드 행을 ReviewItem 으로. 순서는 서버(local)와 같다: 안전 의심 먼저, 그 안에서는 오래된 것 먼저, 최대 20건. */
 function reviewItems(rows: any[] | null): ReviewItem[] {
@@ -150,6 +150,10 @@ export function supabaseBackend(url: string, key: string): Backend {
     },
     async restoreFeedback(id, code) {
       await adminRpc("restore_feedback", { p_id: id }, code);
+    },
+    async listDeleted(code) {
+      const d = await adminRpc("list_deleted", {}, code);      // {ok, items[]} — 코드가 틀리면 adminRpc 가 이미 던졌다
+      return (d?.items ?? []) as DeletedItem[];
     },
     async resolveReview(id, label, code) {
       await adminRpc("resolve_review", { p_id: id, p_label: label }, code);

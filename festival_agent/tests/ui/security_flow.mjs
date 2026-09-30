@@ -69,6 +69,13 @@ check("Content-Length 가 숫자가 아니면 400", /^HTTP\/1\.\d 400/.test(r.bu
 r = await post("submit_feedback", JSON.stringify({ p_zone_id: 1, p_text: "본문 크기 점검용 정상 접수: 16KB 이하는 통과" }));
 check("정상 크기 접수는 통과", r.status === 200, `status ${r.status}`);
 
+// 같은 글을 동시에 여러 번 (두 번 누르기·재시도): 접수함에 한 건만, 모두 같은 접수번호 (D5-33 · intake.accept 의 락)
+const nDup0 = inbox();
+const dupBody = JSON.stringify({ p_zone_id: 1, p_text: "동시 접수 점검: 같은 글을 여덟 번 동시에 보내도 한 건이어야 함" });
+const dups = await Promise.all(Array.from({ length: 8 }, () => post("submit_feedback", dupBody)));
+const nos = new Set(dups.map((x) => x.body.data));
+check("같은 글 동시 8번 → 접수함에 1건, 접수번호 하나", dups.every((x) => x.status === 200) && inbox() === nDup0 + 1 && nos.size === 1, `+${inbox() - nDup0}건 · 번호 ${[...nos].join(",")} · 상태 ${[...new Set(dups.map((x) => x.status))].join(",")}`);
+
 // ② 오류 문구 — 내부 정보 없음
 const LEAK = /keyword|argument|submit_feedback\(|Traceback|sqlite|\.py|Error\b|[A-Za-z]:\\|no such|OperationalError|SELECT |DB_PATH/i;
 const cases = [["배열 JSON", "[1,2,3]"], ["문자열 JSON", '"abc"'], ["깨진 JSON", "{not json"], ["모르는 인자", JSON.stringify({ p_zone_id: 1, p_text: "안녕하세요 점검", p_bogus: 1 })]];

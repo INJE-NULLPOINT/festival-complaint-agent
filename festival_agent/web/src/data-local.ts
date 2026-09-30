@@ -1,7 +1,7 @@
 // local 대역 — Supabase 키가 없을 때 python webapi.py 에 붙는다. 제출본 아님.
 // web/.env 에 Supabase 키가 들어가면 쓰이지 않는다. 키 없는 환경용으로 남겨 둔다 (할일 D5-9).
 import { AdminDenied } from "./admin";
-import type { Backend } from "./data";
+import type { Backend, DeletedItem } from "./data";
 
 /** HTTP 헤더 값은 영문·숫자·기호(ISO-8859-1)만 된다. 한글 등이 섞인 코드는 헤더에 못 싣는다. */
 const headerSafe = (s: string) => /^[\x20-\x7e]+$/.test(s);
@@ -56,6 +56,7 @@ export function localBackend(): Backend {
       call("/api/rpc/set_action_status", { p_id: id, p_status: status }, code),
     deleteFeedback: (id, code) => call("/api/rpc/delete_feedback", { p_id: id }, code),
     restoreFeedback: (id, code) => call("/api/rpc/restore_feedback", { p_id: id }, code),
+    listDeleted: async (code) => (await call<{ items: DeletedItem[] }>("/api/rpc/list_deleted", {}, code)).items ?? [],
     resolveReview: (id, label, code) => call("/api/rpc/resolve_review", { p_id: id, p_label: label }, code),
     dismissReview: (id, code) => call("/api/rpc/dismiss_review", { p_id: id }, code),
     reopenReview: (id, code) => call("/api/rpc/reopen_review", { p_id: id }, code),

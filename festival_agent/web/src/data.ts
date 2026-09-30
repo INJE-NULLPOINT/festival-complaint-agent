@@ -73,6 +73,11 @@ export type ControlData = {
   /** 집계 창 안의 합성·재생(replay/demo/dev) 민원. on=false 면 배지를 숨긴다. */
   synthetic?: { on: boolean; count: number };
 };
+/** 운영자가 지운(숨긴) 민원 — 되돌리기용 목록의 한 줄 (D5-42). 원문은 접수 때 이미 마스킹된 것. */
+export type DeletedItem = {
+  id: number; raw_text: string; zone: string; zone_id: number | null;
+  posted_at: string; deleted_at: string; label: string | null; status: string | null;
+};
 export type ActionData = { sev: Severity[]; actions: Action[]; jobs: DocJob[] };
 
 export type Handlers = {
@@ -102,6 +107,8 @@ export interface Backend {
   /** 관제에서 민원을 지운다(숨김). 되돌릴 수 있다 (D5-30) */
   deleteFeedback(id: number, code?: string): Promise<void>;
   restoreFeedback(id: number, code?: string): Promise<void>;
+  /** 최근에 지운 민원 최대 50건 (최신순) — 토스트가 지나간 뒤에도 되돌릴 수 있게 (D5-42). 복구는 restoreFeedback. */
+  listDeleted(code?: string): Promise<DeletedItem[]>;
   // ── 확인 필요 처리 (D5-32) — 모두 운영자 코드가 필요하다
   /** 유형 지정 (status='review' 일 때만). 안전·혼잡을 고르면 안전 의심으로 자동 처리된다 */
   resolveReview(id: number, label: string, code?: string): Promise<void>;

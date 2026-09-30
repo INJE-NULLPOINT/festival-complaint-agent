@@ -401,7 +401,19 @@ else {
   const c1 = await get("/api/control");
   check("지우기(서버): 유입에서 빠지고 총 건수가 줄어듦", probe.status === 200 && !c1.feed.some((f) => f.id === fid) && c1.total === control0.total - 1, `#${fid} 총 ${control0.total} → ${c1.total}`);
   check("지우기(서버): 변화를 SSE 로 알림", !!(await until(() => sseSince(t0, "change"), 5000)));
+  // 지운 민원 목록 (D5-42) — 토스트가 지나간 뒤에도 되돌릴 수 있게. 코드가 필요하다.
+  const gd = (headers) => fetch(`${base}/api/deleted`, { headers }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
+  check("지운 목록(서버): 코드 없이는 401", (await gd({})).status === 401);
+  check("지운 목록(서버): 틀린 코드는 401", (await gd({ "X-Admin-Code": "wrong-code" })).status === 401);
+  const dl = CODE && headerSafe(CODE) ? await gd({ "X-Admin-Code": CODE }) : null;
+  const dlr = await rpc("list_deleted", {});
+  const items = dlr.data?.items ?? [];
+  const mine = items.find((x) => x.id === fid);
+  if (dl) check("지운 목록(서버): GET /api/deleted 도 같은 내용", dl.status === 200 && Array.isArray(dl.body.data) && dl.body.data.some((x) => x.id === fid), `status ${dl.status}`);
+  check("지운 목록(서버): 방금 지운 민원이 맨 앞에 (id · 원문 · 구역 · 지운 시각)", dlr.status === 200 && items[0]?.id === fid && !!mine?.raw_text && !!mine?.zone && !!mine?.deleted_at, `${items.length}건 · 맨 앞 #${items[0]?.id}`);
+  check("지운 목록(서버): 최대 50건", items.length <= 50);
   const r2 = await rpc("restore_feedback", { p_id: fid });
+  check("지운 목록(서버): 되돌리면 목록에서 빠짐", !((await rpc("list_deleted", {})).data?.items ?? []).some((x) => x.id === fid));
   const c2 = await get("/api/control");
   check("되돌리기(서버): 유입에 돌아오고 건수가 복구", r2.status === 200 && c2.feed.some((f) => f.id === fid) && c2.total === control0.total, `총 ${c2.total}`);
   const again = await rpc("delete_feedback", { p_id: 99999999 });

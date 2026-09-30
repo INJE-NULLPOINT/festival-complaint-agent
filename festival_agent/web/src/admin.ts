@@ -170,7 +170,7 @@ export async function withAdmin<T>(run: (code: string) => Promise<T>, verify: Ve
 }
 
 /** 이 동작들은 운영자 코드가 필요하다 — 서버의 관리자 RPC 와 같은 목록 (web/src/data-*.ts 가 코드를 싣는 이름) */
-export const ADMIN_ACTIONS = ["requestDoc", "setActionStatus", "deleteFeedback", "restoreFeedback", "resolveReview", "dismissReview", "reopenReview"] as const;
+export const ADMIN_ACTIONS = ["requestDoc", "setActionStatus", "deleteFeedback", "restoreFeedback", "listDeleted", "resolveReview", "dismissReview", "reopenReview"] as const;
 
 /** Backend 의 관리자 동작에 문을 건다. 나머지(읽기·접수)는 그대로 지나간다. */
 export function gateAdmin(raw: Backend): Backend {

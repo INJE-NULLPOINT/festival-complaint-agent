@@ -154,21 +154,12 @@ def submit_feedback(p_zone_id, p_text, source: str | None = None) -> int:
         raise ApiError("구역을 선택해 주세요")
     if not _one("SELECT id FROM zone WHERE id=?", (zone_id,)):
         raise ApiError("구역을 선택해 주세요")
-    # D5-33: ②출처별 폭주 제한 → ①같은 글 합치기 → 저장. (source 는 접속 주소의 하루 해시, 모르면 ② 건너뜀)
+    # D5-33: ②출처별 폭주 제한 → ①같은 글 합치기 → 저장을 intake.accept 가 한 덩어리로(락) 한다 —
+    # 같은 글을 동시에 두 번 눌러도 한 건이 된다. (source 는 접속 주소의 하루 해시, 모르면 ② 건너뜀. 합쳐진 글은 같은 접수번호로 성공 응답)
     try:
-        intake.check_rate(source)
+        return intake.accept(zone_id, p_text.strip(" "), source)
     except intake.RateLimited as e:
         raise ApiError(str(e))
-    dup = intake.find_duplicate(zone_id, p_text)
-    if dup is not None:
-        return dup                                        # 조용히 합친다 — 같은 접수번호로 성공 응답
-    with db.connect() as conn:
-        cur = conn.execute(
-            "INSERT INTO feedback_inbox (zone_id, text, created_at) VALUES (?,?,?)",
-            (zone_id, p_text.strip(" "), seoul_now()),
-        )
-        conn.commit()
-        return cur.lastrowid
 
 
 def request_doc(p_label) -> int:
@@ -244,6 +235,16 @@ def reopen_review(p_id) -> None:
     _review_call(review.reopen, p_id)
 
 
+def list_deleted(p_limit=50) -> dict:
+    """최근에 지운 민원 (되돌리기용 목록, D5-42). 운영자 코드가 필요하다(ADMIN_RPC). schema.sql 의 list_deleted(p_code) 와 같은 모양 {ok, items}.
+    원문은 접수 때 이미 마스킹된 것이다. 지운 시각 최신순, 기본 50건(최대 200)."""
+    try:
+        n = int(p_limit)
+    except (TypeError, ValueError):
+        n = 50
+    return {"ok": True, "items": db.list_deleted(n)}
+
+
 def check_admin() -> bool:
     """운영자 코드가 맞는지만 확인한다 (코드 입력 창용). 검사는 call_rpc 가 한다."""
     return True
@@ -258,6 +259,7 @@ RPC = {
     "resolve_review": resolve_review,
     "dismiss_review": dismiss_review,
     "reopen_review": reopen_review,
+    "list_deleted": list_deleted,
     "check_admin": check_admin,
 }
 # 관리자 동작 — 운영자 코드(X-Admin-Code 헤더 또는 p_code)가 맞을 때만 실행한다 (D5-31).
@@ -274,7 +276,7 @@ def _log_error(where: str, e: Exception) -> None:
     """자세한 오류는 콘솔(로그)에만 남기고 응답에는 고정 문구만 보낸다 (경로·SQL 조각이 새지 않게, D5-40 ③)."""
     print(f"[webapi] 오류 {where}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 ADMIN_RPC = frozenset({"request_doc", "set_action_status", "delete_feedback", "restore_feedback",
-                       "resolve_review", "dismiss_review", "reopen_review", "check_admin"})
+                       "resolve_review", "dismiss_review", "reopen_review", "list_deleted", "check_admin"})
 
 
 def call_rpc(name: str, args: dict, code: str | None = None, source: str | None = None):
@@ -369,6 +371,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._events()
         if path.startswith("/api/docs/"):
             return self._doc(unquote(path.removeprefix("/api/docs/")))
+        if path == "/api/deleted":                      # 관리자 전용 읽기 — X-Admin-Code 헤더 (한글 코드는 POST /api/rpc/list_deleted 의 p_code)
+            return self._admin_get("list_deleted")
         fn = GET.get(path)
         if not fn:
             return self._send(404, {"error": "없는 경로"})
@@ -376,6 +380,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"backend": BACKEND, "data": fn()})
         except Exception as e:
             _log_error(f"GET {path}", e)
+            self._send(500, {"error": "서버 오류"})
+
+    def _admin_get(self, rpc_name: str) -> None:
+        try:
+            src = source_id.client_source(self.client_address[0], ",".join(self.headers.get_all("X-Forwarded-For") or []))
+            data = call_rpc(rpc_name, {}, self.headers.get("X-Admin-Code"), src)
+            self._send(200, {"backend": BACKEND, "data": data["items"]})
+        except admin.AdminError as e:                    # 401 · 403 · 429 — POST 와 같은 규칙
+            self._send(e.status, {"error": str(e)})
+        except Exception as e:
+            _log_error(f"GET {rpc_name}", e)
             self._send(500, {"error": "서버 오류"})
 
     def do_POST(self):
