@@ -311,6 +311,10 @@ def connect():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
+    # 전원·블루스크린 대비: FULL 은 커밋마다 디스크에 쓴 뒤 끝난다(WAL 에서 NORMAL 은 마지막 몇 건을 잃을 수 있다).
+    # 이 시스템은 쓰기가 초당 몇 건이라 FULL 의 비용이 무시할 만하다. WAL 은 1000쪽마다 본 파일로 합친다.
+    conn.execute("PRAGMA synchronous=FULL")
+    conn.execute("PRAGMA wal_autocheckpoint=1000")
     return conn
 
 

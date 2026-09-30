@@ -190,6 +190,15 @@ def main() -> None:
         from core import config
         args.window = config.DEFAULT_WINDOW_MIN
 
+    lock = None
+    if not args.once:
+        # 같은 DB 로 워커가 둘 뜨면 같은 대기 민원을 둘이 분류한다 (Agent Path 도 겹친다)
+        from core import config as _cfg, procguard
+        lock = procguard.acquire("worker", _cfg.DB_PATH)
+        if lock is None:
+            print("[worker] 같은 DB 로 이미 워커가 실행 중입니다. 중복 실행을 막았습니다.", file=sys.stderr)
+            sys.exit(1)
+
     db.init_db()
     replay.ensure()
     print(f"[worker] 시작 · Fast {args.interval}s · Agent "

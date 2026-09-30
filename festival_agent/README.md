@@ -22,6 +22,10 @@ python worker.py --agent-interval 20  # 시연용 (반응 빠르게)
 python worker.py --no-agents          # ①분류만 (비용 절약)
 ```
 
+**멈춤 대비 — 서버 일괄 실행**: `python scripts/run_all_servers.py` 한 줄이 webapi·worker·vite 를 분리 프로세스로 띄우고, 죽으면 2→60초 간격으로 다시 띄웁니다
+(로그 `output/logs/`, 중복 실행 차단, DB 를 30분마다 `backup/auto_*.db` 로 복사해 최근 12개만 보관 — `backup/` 은 git 제외, `--phone`·`--only`·`--dry-run`·`--backup-now` 지원).
+SQLite 는 `synchronous=FULL` + WAL 이라 전원이 나가도 커밋된 건은 남고, 워커도 같은 DB 로 두 개 뜨지 않습니다.
+
 ### 터미널 버전
 
 브라우저 없이 같은 DB를 다룹니다. Streamlit과 동시에 켜도 됩니다.

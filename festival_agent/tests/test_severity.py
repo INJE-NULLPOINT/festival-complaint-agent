@@ -1636,6 +1636,73 @@ def test_분류_prefetch_모드는_기본이_아니고_한번에_저장한다():
                 os.environ["LLM_BACKEND"] = old_env
 
 
+def test_멈춤_대비_잠금_백업_감시_재시작():
+    import importlib.util
+    import os
+    import sqlite3
+    import subprocess
+    import tempfile
+
+    from core import procguard
+    tmp = Path(tempfile.mkdtemp())
+    # ① PID 잠금: 살아 있는 소유자가 있으면 못 잡고, 죽은 소유자의 잠금은 치운다
+    procguard.LOCK_DIR = tmp / "locks"
+    first = procguard.acquire("unit", "k1")
+    assert first and first.read_text().strip() == str(os.getpid())
+    assert procguard.acquire("unit", "k1", pid=os.getpid() + 1) is None            # 이미 잡혀 있음(소유자 생존)
+    assert procguard.acquire("unit", "k2") is not None                              # 다른 키는 따로
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    first.write_text(str(dead.pid))                                                 # 죽은 프로세스가 남긴 잠금
+    assert not procguard.pid_alive(dead.pid) and procguard.pid_alive(os.getpid())
+    assert procguard.acquire("unit", "k1") is not None
+    procguard.release(procguard.lock_path("unit", "k1"))
+    assert not procguard.lock_path("unit", "k1").exists()
+    # ② 백업: 일관된 사본 + 자동 백업만 최근 N개 유지 (손으로 만든 백업은 안 지움)
+    src = tmp / "s.db"
+    c = sqlite3.connect(src)
+    c.execute("CREATE TABLE t (x)")
+    c.execute("INSERT INTO t VALUES (7)")
+    c.commit()
+    c.close()
+    dest_dir = tmp / "backup"
+    dest_dir.mkdir()
+    manual = dest_dir / "festival_manual_before_reset.db"
+    manual.write_bytes(b"keep me")
+    made = [procguard.backup_db(keep=3, src=str(src), dest_dir=dest_dir) for _ in range(5)]
+    autos = sorted(dest_dir.glob("auto_*.db"))
+    assert len(autos) == 3 and manual.exists() and len(set(made)) == 5
+    assert sqlite3.connect(made[-1]).execute("SELECT x FROM t").fetchone()[0] == 7
+    # ③ 감시: 금방 죽는 프로세스는 간격을 늘려 가며 다시 띄운다
+    spec = importlib.util.spec_from_file_location("run_all_t", str(Path(__file__).resolve().parent.parent / "scripts" / "run_all_servers.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    m.LOG_DIR = tmp / "logs"
+    s = m.Managed("dummy", [sys.executable, "-c", "import sys; sys.exit(3)"], tmp)
+    now = 1000.0
+    assert s.check(now) == "restarted" and s.proc is not None
+    s.proc.wait()
+    assert s.check(now + 1) == "waiting" and s.restarts == 1 and s.delay == 4.0   # 2초 뒤 재시작 예정, 다음 간격 4초
+    assert s.check(now + 1.5) == "waiting"                                          # 아직 대기
+    assert s.check(now + 3.5) == "restarted"                                        # 2초가 지나 다시 띄움
+    s.proc.wait()
+    s.check(now + 5)
+    assert s.restarts == 2 and s.delay == 8.0
+    s.stop()
+    assert "종료 코드 3" in (tmp / "logs" / "dummy.log").read_text(encoding="utf-8")
+    # 이미 쓰이는 포트는 건드리지 않는다
+    import socket
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    busy = m.Managed("busy", [sys.executable, "-c", "pass"], tmp, port=srv.getsockname()[1])
+    assert busy.check(now) == "skipped" and busy.proc is None
+    srv.close()
+    # ④ backup/ 은 git 에서 제외된다
+    ignore = (Path(__file__).resolve().parent.parent.parent / ".gitignore")
+    assert not ignore.exists() or "festival_agent/backup/" in ignore.read_text(encoding="utf-8")
+
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):
