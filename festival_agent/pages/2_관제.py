@@ -9,7 +9,7 @@
 import pandas as pd
 import streamlit as st
 
-from core import config, db, llm, replay, severity
+from core import config, db, llm, replay, review, severity, ui
 
 st.set_page_config(page_title="관제", page_icon="📊", layout="wide")
 
@@ -86,6 +86,10 @@ def board() -> None:
             f"{a['detail']}"
         )
 
+    # ── 관제 '지금 조치할 일' 카드 (D5-29) — 웹 관제와 같은 issue 표 ─────────────
+    ui.render_cards()
+    st.divider()
+
     left, right = st.columns([3, 2])
 
     with left:
@@ -133,6 +137,10 @@ def board() -> None:
                         )
 
     with right:
+        if db.review_count():
+            with st.expander(f"확인 필요 {db.review_count()}건 — 처리는 '조치' 화면(운영자 코드)에서"):
+                for it in review.items(10):
+                    st.caption(("🚨 " if it["is_safety"] else "") + f"#{it['id']} {it['zone']} · {it['raw_text'][:80]}")
         st.subheader("실시간 유입")
         for f in db.recent_feedback(8):
             label = ("확인 필요" if f["status"] == "review"

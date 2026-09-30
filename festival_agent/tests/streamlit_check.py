@@ -133,6 +133,57 @@ def main() -> int:
     else:
         check("조치: '요청서 생성' 버튼", True, "모든 대상 유형에 요청서가 있어 버튼 없음 (정상)")
 
+    # 6. 관제 '지금 조치할 일' 카드 (D5-35) — 웹과 같은 issue 표
+    from core import issues, review
+    issues.refresh()
+    at = page("pages/2_관제.py").run()
+    with db.connect() as conn:
+        n_cards = conn.execute("SELECT COUNT(*) n FROM issue WHERE active=1").fetchone()["n"]
+    check("관제: '지금 조치할 일' 카드 구역", not at.exception and "지금 조치할 일" in [h.value for h in at.subheader],
+          f"활성 카드 {n_cards}장")
+
+    # 7. 확인 필요 목록 — 관제는 보기만, 조치 화면에서 운영자 코드가 있어야 처리
+    ids = []
+    for txt, safe in (("뭔가 위험한 느낌이 들어요 어디가 문제인지는 모르겠어요", 1), ("분위기가 좀 그랬어요 그냥 그랬어요", 0),
+                      ("장난 글입니다 이건 지워 주세요 테스트용이에요", 0)):
+        fid = db.insert_feedback(1, txt, source="test")
+        with db.connect() as conn:
+            conn.execute("UPDATE classification SET status='review', is_safety=?, confidence=0.1, "
+                         "suggested_label='guide', agent_note='점검용' WHERE feedback_id=?", (safe, fid))
+            conn.commit()
+        ids.append(fid)
+    at = page("pages/2_관제.py").run()
+    check("관제: 확인 필요 목록(보기만)", not at.exception and any("확인 필요" in e.label for e in at.expander)
+          and not [b for b in at.button if b.label in ("유형 지정", "유형 없음", "지우기")],
+          f"{review.items(20)[0]['id'] == ids[0]} 안전 의심이 맨 앞")
+    at = page("pages/3_조치.py").run()
+    check("조치: 코드 전에는 확인 필요·지우기 버튼 없음", not [b for b in at.button if b.label in ("유형 지정", "유형 없음", "지우기", "되돌리기")],
+          "잠김")
+    at.sidebar.text_input[0].input(check_code).run()
+    [b for b in at.sidebar.button if b.label == "확인"][0].click().run()
+    keys = {b.key for b in at.button}
+    check("조치: 운영자 모드에서 확인 필요 처리 버튼", {f"rv_r{ids[0]}", f"rv_d{ids[1]}", f"rv_x{ids[2]}"} <= keys,
+          "유형 지정·유형 없음·지우기")
+    # 유형 지정 (selectbox 기본값 = 모델 제안 guide)
+    [b for b in at.button if b.key == f"rv_r{ids[0]}"][0].click().run()
+    [b for b in at.button if b.key == f"rv_d{ids[1]}"][0].click().run()
+    [b for b in at.button if b.key == f"rv_x{ids[2]}"][0].click().run()
+    with db.connect() as conn:
+        st_ = {r["feedback_id"]: (r["status"], r["label"], r["decided_by"]) for r in conn.execute(
+            "SELECT feedback_id, status, label, decided_by FROM classification WHERE feedback_id IN (?,?,?)", ids)}
+        deleted = conn.execute("SELECT deleted_at FROM feedback WHERE id=?", (ids[2],)).fetchone()["deleted_at"]
+    check("조치: 유형 지정 → done(operator) · 유형 없음 → dismissed · 지우기 → 숨김",
+          st_[ids[0]][:1] == ("done",) and st_[ids[0]][2] == "operator" and st_[ids[1]][0] == "dismissed" and deleted,
+          f"{st_[ids[0]][:2]} / {st_[ids[1]][0]} / 지움={bool(deleted)}")
+    at = page("pages/3_조치.py").run()
+    at.sidebar.text_input[0].input(check_code).run()
+    [b for b in at.sidebar.button if b.label == "확인"][0].click().run()
+    check("조치: 지운 민원 목록에 되돌리기 버튼", f"rs_{ids[2]}" in {b.key for b in at.button}, "")
+    [b for b in at.button if b.key == f"rs_{ids[2]}"][0].click().run()
+    with db.connect() as conn:
+        back = conn.execute("SELECT deleted_at FROM feedback WHERE id=?", (ids[2],)).fetchone()["deleted_at"]
+    check("조치: 되돌리기 → 다시 보임", back is None and not at.exception, "")
+
     shutil.rmtree(tmp, ignore_errors=True)
 
     passed = sum(ok for _, ok, _ in results)

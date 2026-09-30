@@ -7,7 +7,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from core import admin, config, db, replay
+from core import config, db, replay, ui
 
 st.set_page_config(page_title="조치", page_icon="📄", layout="wide")
 
@@ -20,36 +20,8 @@ GRADE_ICON = {"immediate": "🔴", "high": "🟠", "mid": "🟡", "low": "🟢"}
 st.title("📄 부서별 조치요청서")
 
 
-def gate() -> bool:
-    """운영자 코드를 확인한 세션이면 True. 조치 상태 변경·요청서 생성·리플레이 조작은 이때만 된다 (D5-31).
-
-    webapi 와 같은 규칙(core/admin.verify)이라 이 화면이 우회로가 되지 않는다.
-    코드가 설정돼 있지 않으면(ADMIN_CODE 비어 있음) 이 동작들은 전부 잠긴다. 조회·DOCX 내려받기는 그대로다.
-    """
-    if not config.ADMIN_CODE:
-        st.sidebar.warning("운영자 코드가 설정되지 않았습니다 (.env 의 ADMIN_CODE).\n\n"
-                           "조치 상태 변경·요청서 생성·리플레이는 잠겨 있습니다.")
-        return False
-    if st.session_state.get("admin_ok"):
-        if st.sidebar.button("운영자 잠금"):
-            st.session_state["admin_ok"] = False
-            st.rerun()
-        st.sidebar.success("운영자 모드")
-        return True
-    code = st.sidebar.text_input("운영자 코드", type="password", key="admin_code_input")
-    if st.sidebar.button("확인"):
-        try:
-            admin.verify(code)
-        except admin.AdminError as e:
-            st.sidebar.error(str(e))
-        else:
-            st.session_state["admin_ok"] = True
-            st.rerun()
-    st.sidebar.caption("조치 상태 변경·요청서 생성·리플레이는 운영자 코드가 필요합니다.")
-    return False
-
-
-admin_ok = gate()
+admin_ok = ui.gate()        # 운영자 코드 창은 core/ui.py (관제·조치 공용)
+ui.flash()
 
 ranked = db.ranked()
 
@@ -139,6 +111,13 @@ st.caption(
     f"미조치 {config.PENDING_MINUTES}분 경과 시 심각도 ×{config.W_PENDING} 가중 (S-06). "
     "조치 상태가 다음 판정과 ④통합 에이전트의 우선순위에 되먹임됩니다."
 )
+
+st.divider()
+
+# ── 확인 필요 · 지우기 (운영자 코드) ────────────────────────────────
+ui.review_panel(admin_ok)
+ui.recent_delete_panel(admin_ok)
+ui.deleted_panel(admin_ok)
 
 st.divider()
 
