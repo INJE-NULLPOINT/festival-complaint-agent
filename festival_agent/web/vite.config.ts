@@ -3,7 +3,9 @@ import { defineConfig } from "vite";
 // local 대역(python webapi.py)으로 /api 를 넘긴다. Supabase 모드에서는 쓰이지 않는다.
 // WEBAPI_PORT 로 다른 webapi 에 붙일 수 있다 (예: 테스트용 복사본 DB).
 const port = process.env.WEBAPI_PORT ?? "8765";
-const proxy = { "/api": `http://127.0.0.1:${port}` };
+// xfwd: true — 요청마다 X-Forwarded-For(접속자 주소)를 붙인다. 없으면 폰으로 들어온 요청도 webapi 에는 전부 127.0.0.1 로 보여
+// 운영자 코드 잠금(틀린 횟수)이 출처별이 아니라 전체 공용이 된다 (D5-40). webapi 는 접속자가 루프백일 때만 이 헤더를 믿는다.
+const proxy = { "/api": { target: `http://127.0.0.1:${port}`, xfwd: true } };
 
 export default defineConfig({
   server: { proxy },
