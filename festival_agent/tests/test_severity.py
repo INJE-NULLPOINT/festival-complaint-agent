@@ -1434,6 +1434,79 @@ def test_지운_민원_목록_최신순_되돌리면_빠진다():
         assert [r["id"] for r in db.list_deleted()] == [ids[0]]
 
 
+def test_도배방지_같은글_합치기_출처별_제한_구역몰림_표시():
+    """D5-33: ①같은 구역·같은 글(공백·기호 무시) 2분 안 → 합침 ②한 출처 폭주 → 거절, 다른 출처 통과 ③몰림은 표시만."""
+    from datetime import datetime, timedelta
+
+    import webapi
+    from core import intake, source_id
+    with _temp_db() as db:
+        def rows(sql="SELECT id, dup_count FROM feedback_inbox ORDER BY id"):
+            with db.connect() as conn:
+                return [tuple(r) for r in conn.execute(sql).fetchall()]
+        a = webapi.submit_feedback(1, "화장실 휴지가 다 떨어졌어요")
+        b = webapi.submit_feedback(1, "화장실  휴지가 다 떨어졌어요!!!")                  # 공백·기호만 다른 같은 글
+        assert a == b and rows() == [(a, 1)]                                          # 1건·합친 횟수 1 (조용히 성공 응답)
+        assert webapi.submit_feedback(1, "화장실 휴지가 다 떨어졌어요") == a and rows() == [(a, 2)]
+        c = webapi.submit_feedback(2, "화장실 휴지가 다 떨어졌어요")                     # 다른 구역 같은 글 → 새로
+        d = webapi.submit_feedback(1, "화장실 휴지가 없고 줄도 길어요")                  # 같은 구역 다른 말 → 새로
+        assert len({a, c, d}) == 3
+        with db.connect() as conn:                                                     # 2분이 지나면 같은 글도 다시 들어간다
+            conn.execute("UPDATE feedback_inbox SET created_at=? WHERE id=?",
+                         ((intake.seoul_now() - timedelta(minutes=3)).strftime("%Y-%m-%dT%H:%M:%S"), a))
+            conn.commit()
+        e = webapi.submit_feedback(1, "화장실 휴지가 다 떨어졌어요!")                 # (저장 해시가 a 와 겹치지 않게 기호만 다르게)
+        assert e not in (a, c, d)
+        # 워커가 옮긴 뒤에도(원문은 마스킹본) 합쳐지고, 접수번호는 그대로, 횟수는 feedback 에 쌓인다
+        assert db.pull_inbox() >= 3
+        with db.connect() as conn:
+            fid = conn.execute("SELECT feedback_id FROM feedback_inbox WHERE id=?", (e,)).fetchone()["feedback_id"]
+            assert conn.execute("SELECT dup_count FROM feedback WHERE id=?", (fid,)).fetchone()["dup_count"] == 0
+        assert webapi.submit_feedback(1, "화장실 휴지가 다 떨어졌어요") == e
+        with db.connect() as conn:
+            assert conn.execute("SELECT dup_count FROM feedback WHERE id=?", (fid,)).fetchone()["dup_count"] == 1
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(feedback)")}
+        assert not ({"src", "ip", "source_hash"} & cols)                              # 민원 행에는 출처 해시가 없다
+        # ② 출처별 제한 — A 출처가 1분에 10건을 넘으면 거절, B 출처·출처 미상은 통과
+        src_a, src_b = source_id.source_hash("203.0.113.7"), source_id.source_hash("198.51.100.9")
+        for i in range(10):
+            webapi.submit_feedback(3, f"표지판이 없어서 헤맸어요 {i}번째 이야기", source=src_a)
+        try:
+            webapi.submit_feedback(3, "표지판이 없어서 헤맸어요 열한번째 이야기", source=src_a)
+        except webapi.ApiError as ex:
+            assert str(ex) == "잠시 후 다시 보내 주세요" and "10" not in str(ex)        # 한도 숫자·기준은 알려 주지 않는다
+        else:
+            raise AssertionError("폭주가 거절되지 않음")
+        assert webapi.submit_feedback(3, "표지판이 없어서 헤맸어요 열한번째 이야기", source=src_b) > 0
+        assert webapi.submit_feedback(3, "출처를 모르는 접수도 그대로 통과해요", source=None) > 0
+        with db.connect() as conn:                                                     # 24시간 지난 기록은 지워진다
+            conn.execute("UPDATE submit_rate SET at='2000-01-01T00:00:00' WHERE src=?", (src_a,))
+            conn.commit()
+        assert webapi.submit_feedback(3, "하루 뒤에는 다시 보낼 수 있어요 정말로", source=src_a) > 0
+        with db.connect() as conn:
+            assert conn.execute("SELECT COUNT(*) c FROM submit_rate WHERE at < '2001'").fetchone()["c"] == 0
+            assert "203.0.113.7" not in str([tuple(r) for r in conn.execute("SELECT * FROM submit_rate")])   # 원문 IP 없음
+        # 켜고 끄기
+        from core import config
+        old = (config.DEDUP_ENABLED, config.SUBMIT_LIMIT_ENABLED)
+        config.DEDUP_ENABLED = False
+        try:
+            x = webapi.submit_feedback(4, "끄면 같은 글도 그대로 들어가요 정말")
+            y = webapi.submit_feedback(4, "끄면 같은 글도 그대로 들어가요 정말")
+            assert x != y
+        finally:
+            config.DEDUP_ENABLED, config.SUBMIT_LIMIT_ENABLED = old
+        # ③ 몰림은 막지 않고 표시만 — 심각도는 그대로
+        _seed(db, [(5, "restroom", 5, -0.6, False, "화장실 줄이 너무 길어요")])
+        before = [(r["label"], r["score"]) for r in db.ranked()]
+        assert intake.zone_burst() == []
+        for i in range(config.CROWD_FLAG_MIN):
+            webapi.submit_feedback(5, f"유등터널 입구가 붐벼서 밀려요 {i}번째 사람", source=None)
+        burst = webapi.get_control()["crowding"]
+        assert len(burst) == 1 and burst[0]["zone_id"] == 5 and burst[0]["count"] >= config.CROWD_FLAG_MIN
+        assert [(r["label"], r["score"]) for r in db.ranked()] == before
+
+
 def test_운영자코드_미설정이면_관리자_동작은_전부_거부():
     from core import admin
     import webapi

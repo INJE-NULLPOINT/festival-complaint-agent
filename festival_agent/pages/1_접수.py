@@ -5,7 +5,7 @@
 """
 import streamlit as st
 
-from core import config, db, privacy
+from core import config, db, intake, privacy
 
 st.set_page_config(page_title="불편신고", page_icon="📝")
 
@@ -34,7 +34,8 @@ if submitted:
         st.error(privacy.NEED_MORE)
     else:
         zone_id = next(z["id"] for z in zones if z["name"] == zone_name)
-        fid = db.insert_feedback(zone_id, text, source="qr")
+        merged = intake.find_duplicate(zone_id, text)        # 2분 안의 같은 글은 조용히 합친다 (D5-33 ①)
+        fid = merged if merged is not None else db.insert_feedback(zone_id, text, source="qr")
         if fid is None:
             st.info("이미 접수된 내용입니다.")
         else:

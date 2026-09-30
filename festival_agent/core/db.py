@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS feedback (
   posted_at   TEXT,          -- 리플레이는 원본 시각
   ingested_at TEXT,          -- 실제 수신 시각 (실시간 증명)
   hash        TEXT UNIQUE,
-  deleted_at  TEXT           -- NULL = 살아 있음, 값 = 운영자가 지움(숨김·되돌리기 가능)
+  deleted_at  TEXT,          -- NULL = 살아 있음, 값 = 운영자가 지움(숨김·되돌리기 가능)
+  dup_count   INTEGER DEFAULT 0   -- 같은 글을 2분 안에 또 보내 합쳐진 횟수 (D5-33 ①)
 );
 
 CREATE TABLE IF NOT EXISTS classification (
@@ -85,8 +86,15 @@ CREATE TABLE IF NOT EXISTS action_request (
 -- 웹 접수폼이 넣는 곳. 워커가 마스킹 후 feedback 으로 옮긴다.
 CREATE TABLE IF NOT EXISTS feedback_inbox (
   id INTEGER PRIMARY KEY, zone_id INTEGER, text TEXT, created_at TEXT,
-  feedback_id INTEGER
+  feedback_id INTEGER,
+  dup_count INTEGER DEFAULT 0     -- 합쳐진 횟수 (D5-33 ①)
 );
+
+-- 출처별 폭주 제한용 (D5-33 ②). 출처 = 접속 주소의 하루짜리 해시(원문 IP 아님), 24시간 뒤 삭제, 민원 행과 연결하지 않는다.
+CREATE TABLE IF NOT EXISTS submit_rate (
+  id INTEGER PRIMARY KEY, src TEXT, at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rate_src_at ON submit_rate(src, at);
 
 -- 웹의 '조치요청서 생성' 버튼이 넣는 곳. 워커가 처리한다.
 CREATE TABLE IF NOT EXISTS doc_job (
@@ -344,6 +352,10 @@ def _migrate_sqlite(conn) -> None:
     for col in ("doc_url", "doc_json"):
         if col not in have:
             conn.execute(f"ALTER TABLE action_request ADD COLUMN {col} TEXT")
+    for tbl in ("feedback", "feedback_inbox"):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({tbl})")}
+        if cols and "dup_count" not in cols:
+            conn.execute(f"ALTER TABLE {tbl} ADD COLUMN dup_count INTEGER DEFAULT 0")
     have = {r["name"] for r in conn.execute("PRAGMA table_info(admin_attempt)")}
     if have and "src" not in have:
         conn.execute("ALTER TABLE admin_attempt ADD COLUMN src TEXT DEFAULT ''")
@@ -744,7 +756,7 @@ def pull_inbox(limit: int = 50) -> int:
     """
     with connect() as conn:
         rows = conn.execute(
-            "SELECT id, zone_id, text FROM feedback_inbox WHERE feedback_id IS NULL "
+            "SELECT id, zone_id, text, COALESCE(dup_count, 0) dup_count FROM feedback_inbox WHERE feedback_id IS NULL "
             "ORDER BY id LIMIT ?", (limit,)
         ).fetchall()
     moved = 0
@@ -754,6 +766,8 @@ def pull_inbox(limit: int = 50) -> int:
             # 원문은 지우고 접수번호만 남긴다. 중복이면 -1.
             conn.execute("UPDATE feedback_inbox SET feedback_id=?, text=NULL WHERE id=?",
                          (fid if fid is not None else -1, r["id"]))
+            if fid is not None and r["dup_count"]:                   # 옮기기 전에 합쳐진 횟수를 이어 준다
+                conn.execute("UPDATE feedback SET dup_count=? WHERE id=?", (r["dup_count"], fid))
             conn.commit()
         moved += fid is not None
     return moved

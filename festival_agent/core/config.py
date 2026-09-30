@@ -195,4 +195,11 @@ ESCALATION_WORDS = ["중단", "폐쇄", "대피", "진입 통제", "출입 통�
 CLASSIFY_MODE = os.getenv("CLASSIFY_MODE", "agent").strip().lower()
 PREFETCH_LIMIT = 10     # prefetch 모드에서 한 번에 프롬프트에 넣는 민원 수 (출력 토큰이 건수에 비례)
 
+# ── 접수 도배 방지 (D5-33, core/intake.py) — 숫자는 설계값 [확인 필요: 리허설로 조정] ──
+DEDUP_ENABLED = os.getenv("DEDUP_ENABLED", "1") != "0"                 # ① 같은 구역·같은 글 합치기
+DEDUP_WINDOW_SEC = 120
+SUBMIT_LIMIT_ENABLED = os.getenv("SUBMIT_LIMIT_ENABLED", "1") != "0"   # ② 출처(IP 하루 해시)별 폭주 제한
+SUBMIT_LIMITS = ((60, 10), (600, 30))                                  # (초, 건수): 1분 10건 · 10분 30건
+CROWD_FLAG_SEC, CROWD_FLAG_MIN = 60, 20                                # ③ 한 구역 1분 20건 이상이면 표시만
+
 CARD_TEXT_MIN_INTERVAL = 60   # 같은 카드의 문구를 다시 쓰는 최소 간격(초). 등급·조치 그룹이 바뀌면 즉시
