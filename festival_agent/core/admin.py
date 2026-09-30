@@ -10,7 +10,10 @@
   · 코드가 설정돼 있지 않으면(ADMIN_CODE 비어 있음) 관리자 동작을 전부 거부한다 — 열린 채로 시작하지 않는다.
   · 코드를 안 보냈으면 거부. 틀린 코드는 거부하고 실패로 센다. 코드를 안 보낸 요청은 실패로 세지 않는다
     (누가 빈 요청을 보내 운영자를 잠그지 못하게).
-  · 최근 10분에 5번 틀리면 10분 안에는 맞는 코드도 거부한다 (무차별 대입 방지). 맞으면 실패 기록을 비운다.
+  · 최근 10분에 **같은 출처에서** 5번 틀리면 그 출처는 10분 안에는 맞는 코드도 거부한다 (무차별 대입 방지).
+    맞는 코드를 넣으면 **그 출처의** 기록만 비운다. 출처는 접속 주소의 하루짜리 해시(core/source_id.py)라서,
+    방문객이 틀린 코드를 몇 번 보내도 다른 출처의 운영자는 잠기지 않는다 (D5-40).
+    접속 주소를 알 수 없으면(source 없음) 예전처럼 전체가 한 출처로 묶인다.
   · 비교는 hmac.compare_digest 로 한다 (시간차 공격 방지).
 
 한계: 공유 코드라 누가 했는지는 구분하지 못한다. 코드가 새면 바꿔야 한다.
@@ -40,28 +43,41 @@ def _stamp(dt: datetime) -> str:
     return dt.astimezone(KST).strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def recent_failures() -> int:
+KEEP_HOURS = 24            # 실패 기록(출처 해시 포함)은 하루가 지나면 지운다
+
+
+def recent_failures(source: str | None = None) -> int:
     cutoff = _stamp(datetime.now(KST) - timedelta(minutes=WINDOW_MIN))
     with db.connect() as conn:
-        return conn.execute("SELECT COUNT(*) c FROM admin_attempt WHERE at >= ?",
-                            (cutoff,)).fetchone()["c"]
+        return conn.execute("SELECT COUNT(*) c FROM admin_attempt WHERE at >= ? AND COALESCE(src, '') = ?",
+                            (cutoff, source or "")).fetchone()["c"]
 
 
-def verify(code) -> None:
-    """운영자 코드가 맞으면 조용히 끝나고, 아니면 AdminError 를 던진다."""
+def _purge_old() -> None:
+    cutoff = _stamp(datetime.now(KST) - timedelta(hours=KEEP_HOURS))
+    with db.connect() as conn:
+        conn.execute("DELETE FROM admin_attempt WHERE at < ?", (cutoff,))
+        conn.commit()
+
+
+def verify(code, source: str | None = None) -> None:
+    """운영자 코드가 맞으면 조용히 끝나고, 아니면 AdminError 를 던진다. source = 출처 해시(없으면 전체 공용)."""
     expected = config.ADMIN_CODE
     if not expected:
         raise AdminError(MSG_NEED, 403)                 # 코드를 안 정했으면 전부 거부
-    if recent_failures() >= MAX_FAIL:
+    source = source or ""
+    if recent_failures(source) >= MAX_FAIL:
         raise AdminError(MSG_LOCKED, 429)               # 잠금 중에는 맞는 코드도 거부 (새 실패는 세지 않는다)
     if not isinstance(code, str) or not code:
         raise AdminError(MSG_NEED, 401)
     if hmac.compare_digest(code.encode("utf-8"), expected.encode("utf-8")):
         with db.connect() as conn:
-            conn.execute("DELETE FROM admin_attempt WHERE id > 0")
+            conn.execute("DELETE FROM admin_attempt WHERE COALESCE(src, '') = ?", (source,))   # 이 출처의 기록만
             conn.commit()
+        _purge_old()
         return
     with db.connect() as conn:
-        conn.execute("INSERT INTO admin_attempt (at) VALUES (?)", (_stamp(datetime.now(KST)),))
+        conn.execute("INSERT INTO admin_attempt (at, src) VALUES (?, ?)", (_stamp(datetime.now(KST)), source))
         conn.commit()
+    _purge_old()
     raise AdminError(MSG_NEED, 401)

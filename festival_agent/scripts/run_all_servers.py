@@ -3,6 +3,8 @@
 사용법
     python scripts/run_all_servers.py                 webapi(8765) + worker + vite 개발 서버(5173)
     python scripts/run_all_servers.py --phone         vite 대신 폰 확인용 빌드본 서버(npm run phone, 4173)
+    python scripts/run_all_servers.py --lan           vite 개발 서버를 --host 로 (같은 Wi-Fi 의 폰이 5173 으로 접속, dev:phone 과 같은 명령)
+    python scripts/run_all_servers.py --llm claude_code --agent-interval 20    워커에 LLM_BACKEND·Agent Path 주기 전달
     python scripts/run_all_servers.py --only webapi worker     일부만
     python scripts/run_all_servers.py --dry-run       명령만 출력
     python scripts/run_all_servers.py --backup-now    DB 를 지금 백업하고 끝
@@ -142,16 +144,22 @@ class Managed:
 
 def build(args) -> list[Managed]:
     py = sys.executable
+    worker_cmd = [py, "worker.py"]
+    if args.agent_interval is not None:
+        worker_cmd += ["--agent-interval", str(args.agent_interval)]
+    child_env = {"LLM_BACKEND": args.llm} if args.llm else {}      # 자식 프로세스(webapi·worker)에만 넣는다
     node = shutil.which("node") or "node"
     web = ROOT / "web"
     items = {
-        "webapi": Managed("webapi", [py, "webapi.py", "--host", args.host, "--port", str(args.port)], ROOT, port=args.port),
-        "worker": Managed("worker", [py, "worker.py"], ROOT),
+        "webapi": Managed("webapi", [py, "webapi.py", "--host", args.host, "--port", str(args.port)], ROOT,
+                          port=args.port, env=child_env),
+        "worker": Managed("worker", worker_cmd, ROOT, env=child_env),
     }
     if args.phone:
         items["vite"] = Managed("vite", [node, "scripts/phone.mjs"], web, port=4173)
     else:
-        items["vite"] = Managed("vite", [node, str(web / "node_modules" / "vite" / "bin" / "vite.js")], web, port=5173)
+        vite_cmd = [node, str(web / "node_modules" / "vite" / "bin" / "vite.js")] + (["--host"] if args.lan else [])
+        items["vite"] = Managed("vite", vite_cmd, web, port=5173)
     return [items[n] for n in ("webapi", "worker", "vite") if n in args.only]
 
 
@@ -165,15 +173,22 @@ def backup_loop(stop: threading.Event) -> None:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):                         # cp949 콘솔에서도 --help·로그가 죽지 않게
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        except Exception:
+            pass
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--only", nargs="+", choices=["webapi", "worker", "vite"], default=["webapi", "worker", "vite"])
     ap.add_argument("--phone", action="store_true", help="vite 개발 서버 대신 폰용 빌드본 서버")
+    ap.add_argument("--lan", action="store_true", help="vite 개발 서버를 --host 로 띄운다 (같은 Wi-Fi 의 폰에서 5173 접속)")
+    ap.add_argument("--llm", choices=["anthropic", "claude_code", "local"], help="LLM_BACKEND 를 webapi·worker 환경에 넣는다")
+    ap.add_argument("--agent-interval", type=float, help="worker --agent-interval (초)")
     ap.add_argument("--host", default="127.0.0.1", help="webapi 주소")
     ap.add_argument("--port", type=int, default=8765, help="webapi 포트")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--backup-now", action="store_true")
     args = ap.parse_args()
-    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 
     if args.backup_now:
         p = procguard.backup_db(keep=BACKUP_KEEP)

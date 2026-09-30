@@ -138,7 +138,8 @@ CREATE TABLE IF NOT EXISTS issue (
 
 -- 운영자 코드를 틀린 시도 기록 (core/admin.py). 10분에 5번 넘게 틀리면 그 창 동안 거부한다.
 CREATE TABLE IF NOT EXISTS admin_attempt (
-  id INTEGER PRIMARY KEY, at TEXT
+  id INTEGER PRIMARY KEY, at TEXT,
+  src TEXT DEFAULT ''          -- 출처 해시(접속 주소 + 하루 비밀값, core/source_id.py). 원문 IP 는 저장하지 않는다
 );
 
 CREATE TABLE IF NOT EXISTS classify_cache (
@@ -324,6 +325,9 @@ def _migrate_sqlite(conn) -> None:
     for col in ("doc_url", "doc_json"):
         if col not in have:
             conn.execute(f"ALTER TABLE action_request ADD COLUMN {col} TEXT")
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(admin_attempt)")}
+    if have and "src" not in have:
+        conn.execute("ALTER TABLE admin_attempt ADD COLUMN src TEXT DEFAULT ''")
     have = {r["name"] for r in conn.execute("PRAGMA table_info(classification)")}
     for col in ("suggested_label", "reviewed_at", "review_action", "decided_by"):
         if col not in have:

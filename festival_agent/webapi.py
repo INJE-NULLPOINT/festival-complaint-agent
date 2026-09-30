@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 
-from core import admin, config, db, issues, llm, privacy, review
+from core import admin, config, db, issues, llm, privacy, review, source_id
 
 BACKEND = "local"
 STATUSES = ("requested", "in_progress", "done")
@@ -250,21 +250,23 @@ RPC = {
 }
 # 관리자 동작 — 운영자 코드(X-Admin-Code 헤더 또는 p_code)가 맞을 때만 실행한다 (D5-31).
 # 방문객이 쓰는 것은 submit_feedback 하나뿐이다. schema.sql 의 같은 이름 RPC 는 p_code 인자로 같은 검사를 한다.
+MAX_BODY = 16 * 1024          # POST 본문 상한 (바이트)
 ADMIN_RPC = frozenset({"request_doc", "set_action_status", "delete_feedback", "restore_feedback",
                        "resolve_review", "dismiss_review", "reopen_review", "check_admin"})
 
 
-def call_rpc(name: str, args: dict, code: str | None = None):
+def call_rpc(name: str, args: dict, code: str | None = None, source: str | None = None):
     """RPC 하나를 실행한다. 관리자 동작이면 먼저 운영자 코드를 검사한다.
 
     없는 함수는 KeyError, 코드 거부는 admin.AdminError(status 401/403/429), 검증 오류는 ApiError.
     코드는 헤더(code)나 본문의 p_code 로 받는다 (Supabase RPC 와 같은 인자 이름).
+    source 는 접속 주소의 하루짜리 해시 — 틀린 코드 횟수·잠금을 출처별로 센다 (D5-40).
     """
     args = dict(args or {})
     body_code = args.pop("p_code", None)
     fn = RPC[name]
     if name in ADMIN_RPC:
-        admin.verify(code if code else body_code)
+        admin.verify(code if code else body_code, source)
     return fn(**args)
 GET = {
     "/api/zones": get_zones,
@@ -337,12 +339,25 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         name = path.removeprefix("/api/rpc/")
+        # 본문은 라우팅보다 먼저 끝까지 읽는다 — 안 읽고 답하면 Windows 에서 연결이 끊겨(WinError 10053) 간헐 오류가 난다.
+        # 크기는 0~16KB (접수는 500자라 충분). 음수·과대 값은 읽지 않고 거절한다 (D5-40 ②).
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if n < 0:
+            self.close_connection = True
+            return self._send(400, {"error": "요청 형식이 올바르지 않습니다"})
+        if n > MAX_BODY:
+            self.close_connection = True
+            return self._send(413, {"error": "요청이 너무 큽니다"})
+        raw = self.rfile.read(n) if n else b""
         if not path.startswith("/api/rpc/") or name not in RPC:
             return self._send(404, {"error": "없는 함수"})
         try:
-            n = int(self.headers.get("Content-Length") or 0)
-            args = json.loads(self.rfile.read(n) or b"{}")
-            data = call_rpc(name, args, self.headers.get("X-Admin-Code"))
+            args = json.loads(raw or b"{}")
+            src = source_id.client_source(self.client_address[0], self.headers.get("X-Forwarded-For"))
+            data = call_rpc(name, args, self.headers.get("X-Admin-Code"), src)
             self._send(200, {"backend": BACKEND, "data": data})
         except admin.AdminError as e:                    # 401 코드 없음·틀림 · 403 코드 미설정 · 429 잠김
             self._send(e.status, {"error": str(e)})

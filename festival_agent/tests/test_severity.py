@@ -1340,6 +1340,71 @@ def test_운영자코드_없음_틀림_5회잠김_맞음():
         assert admin.recent_failures() == 0
 
 
+def test_운영자코드_잠금은_출처별_다른_출처_운영자는_통과():
+    """D5-40: 방문객(출처 A)이 틀린 코드를 5번 보내도 운영자(출처 B)는 맞는 코드로 들어간다."""
+    import json
+    import threading
+    import urllib.error
+    import urllib.request
+
+    import webapi
+    from core import admin, source_id
+    a, b = source_id.source_hash("203.0.113.7"), source_id.source_hash("198.51.100.9")
+    assert a and b and a != b and len(a) == 16 and "203.0.113.7" not in a           # 원문 IP 가 아니라 해시
+    assert source_id.source_hash("203.0.113.7") == a                                # 같은 날 같은 출처는 같은 값
+    assert source_id.source_hash(None) == "" and source_id.client_ip("203.0.113.7", "1.2.3.4") == "203.0.113.7"
+    assert source_id.client_ip("127.0.0.1", "1.2.3.4, 10.0.0.1") == "1.2.3.4"      # 루프백(프록시)일 때만 헤더를 믿는다
+    with _temp_db() as db, _AdminCode("tmp-operator-code"):
+        def status(code, src):
+            try:
+                admin.verify(code, src)
+            except admin.AdminError as e:
+                return e.status
+            return 200
+        for _ in range(5):
+            assert status("wrong", a) == 401
+        assert status("wrong", a) == 429 and status("tmp-operator-code", a) == 429   # A 는 잠김(맞는 코드도 거부)
+        assert status("tmp-operator-code", b) == 200                                   # B 는 통과
+        assert admin.recent_failures(a) == 5 and admin.recent_failures(b) == 0
+        assert status("wrong", b) == 401 and admin.recent_failures(b) == 1
+        assert status("tmp-operator-code", b) == 200 and admin.recent_failures(b) == 0
+        assert admin.recent_failures(a) == 5                                           # 맞는 코드는 B 의 기록만 지운다
+        # 출처를 모르면(None) 예전처럼 전체 공용 한 칸 — A·B 와는 따로 센다
+        for _ in range(5):
+            status("wrong", None)
+        assert status("tmp-operator-code", None) == 429 and status("tmp-operator-code", b) == 200
+        # 저장된 것은 해시뿐이고 24시간이 지난 기록은 지워진다
+        with db.connect() as conn:
+            srcs = {r["src"] for r in conn.execute("SELECT src FROM admin_attempt")}
+            assert srcs <= {a, ""} and all("." not in s for s in srcs)
+            conn.execute("UPDATE admin_attempt SET at='2000-01-01T00:00:00'")
+            conn.commit()
+        assert status("tmp-operator-code", b) == 200
+        with db.connect() as conn:
+            assert conn.execute("SELECT COUNT(*) c FROM admin_attempt").fetchone()["c"] == 0
+        # 실제 HTTP: 프록시(루프백)가 붙인 X-Forwarded-For 로 출처가 갈린다
+        srv = webapi.ExclusiveServer(("127.0.0.1", 0), webapi.Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        port = srv.server_address[1]
+
+        def post(code, xff):
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/api/rpc/check_admin", method="POST", data=b"{}",
+                                         headers={"Content-Type": "application/json", "X-Admin-Code": code,
+                                                  "X-Forwarded-For": xff})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    return r.status
+            except urllib.error.HTTPError as e:
+                return e.code
+        try:
+            for _ in range(5):
+                post("wrong", "203.0.113.7")
+            assert post("tmp-operator-code", "203.0.113.7") == 429                      # 방문객 출처는 잠김
+            assert post("tmp-operator-code", "198.51.100.9") == 200                     # 운영자 출처는 통과
+        finally:
+            srv.shutdown()
+
+
 def test_운영자코드_미설정이면_관리자_동작은_전부_거부():
     from core import admin
     import webapi
