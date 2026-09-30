@@ -28,13 +28,14 @@ import argparse
 import json
 import socket
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 
-from core import admin, config, db, issues, llm, privacy, review, source_id
+from core import admin, config, db, intake, issues, llm, privacy, review, source_id
 
 BACKEND = "local"
 STATUSES = ("requested", "in_progress", "done")
@@ -114,6 +115,7 @@ def get_control() -> dict:
         "issues": issues.list_active(),
         "total": _one("SELECT COUNT(*) n FROM feedback WHERE deleted_at IS NULL")["n"],
         "deleted": db.deleted_count(),                 # 운영자가 지운(숨긴) 민원 수 — 되돌리기용
+        "crowding": intake.zone_burst(),                # 한 구역에 접수가 몰림 — 차단 없이 표시만 (D5-33 ③)
         "backend_llm": llm.backend(),                  # 헤더 표시용: claude_code | anthropic | local (webapi 프로세스 기준)
         "synthetic": db.synthetic_in_window(),         # 창 안에 replay/demo/dev 합성 민원이 있으면 on=true + count
         "alerts": _rows("SELECT * FROM alert WHERE acked=0 ORDER BY id DESC LIMIT 3"),
@@ -137,7 +139,7 @@ def get_action() -> dict:
 
 # ── 쓰기 (schema.sql 의 RPC 와 같은 규칙) ─────────────────────────
 
-def submit_feedback(p_zone_id, p_text) -> int:
+def submit_feedback(p_zone_id, p_text, source: str | None = None) -> int:
     # schema.sql: 한글·영문·숫자 2개 미만 → 거절, length(p_text) > 500 → 거절, zone 존재
     # 내용 규칙은 core/privacy.has_content 와 같다 ('...' 'ㅋㅋ' '!!!!' 거부)
     if not isinstance(p_text, str) or not privacy.has_content(p_text):
@@ -150,6 +152,14 @@ def submit_feedback(p_zone_id, p_text) -> int:
         raise ApiError("구역을 선택해 주세요")
     if not _one("SELECT id FROM zone WHERE id=?", (zone_id,)):
         raise ApiError("구역을 선택해 주세요")
+    # D5-33: ②출처별 폭주 제한 → ①같은 글 합치기 → 저장. (source 는 접속 주소의 하루 해시, 모르면 ② 건너뜀)
+    try:
+        intake.check_rate(source)
+    except intake.RateLimited as e:
+        raise ApiError(str(e))
+    dup = intake.find_duplicate(zone_id, p_text)
+    if dup is not None:
+        return dup                                        # 조용히 합친다 — 같은 접수번호로 성공 응답
     with db.connect() as conn:
         cur = conn.execute(
             "INSERT INTO feedback_inbox (zone_id, text, created_at) VALUES (?,?,?)",
@@ -267,6 +277,8 @@ def call_rpc(name: str, args: dict, code: str | None = None, source: str | None 
     fn = RPC[name]
     if name in ADMIN_RPC:
         admin.verify(code if code else body_code, source)
+    if name == "submit_feedback":
+        return fn(**args, source=source)                  # 출처별 폭주 제한용 (D5-33 ②)
     return fn(**args)
 GET = {
     "/api/zones": get_zones,
@@ -277,6 +289,21 @@ GET = {
 
 
 # ── 실시간 대역 ───────────────────────────────────────────────────
+
+_fp_lock = threading.Lock()
+_fp_cache: tuple[float, tuple] | None = None
+
+
+def shared_fingerprint(max_age: float = 0.8) -> tuple:
+    """SSE 연결마다 1초에 한 번 DB 를 훑으면 접속자 수만큼 DB 일이 늘어난다 (D5-37).
+    0.8초 안에 누가 이미 계산했다면 그 값을 같이 쓴다 → 접속자가 늘어도 초당 DB 조회는 한 번."""
+    global _fp_cache
+    with _fp_lock:
+        now = time.monotonic()
+        if _fp_cache is None or now - _fp_cache[0] >= max_age:
+            _fp_cache = (time.monotonic(), fingerprint())
+        return _fp_cache[1]
+
 
 def fingerprint() -> tuple:
     """화면에 영향을 주는 변화를 한 줄로 요약한다. 값이 바뀌면 다시 그린다."""
@@ -393,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(msg.encode())
             self.wfile.flush()
 
-        last_fp = fingerprint()
+        last_fp = shared_fingerprint(0)        # 처음 값은 새로 계산
         last_alert = max_id("alert")
         done_jobs = {r["id"] for r in _rows("SELECT id FROM doc_job WHERE status='done'")}
         emit("ready", {"backend": BACKEND})
@@ -401,7 +428,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             while True:
                 time.sleep(1)
-                fp = fingerprint()
+                fp = shared_fingerprint()
                 if fp != last_fp:
                     last_fp, idle = fp, 0
                     for a in _rows("SELECT * FROM alert WHERE id>? ORDER BY id", (last_alert,)):
