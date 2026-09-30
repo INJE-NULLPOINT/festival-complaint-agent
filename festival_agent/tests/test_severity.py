@@ -1554,6 +1554,35 @@ def test_도배방지_동시접수_합치기_정리_스트림릿도_같은규칙
     assert "pg_advisory_xact_lock" in sql
 
 
+def test_공격점검_탐지와_카드_판정_기준():
+    import importlib.util
+    import json
+    spec = importlib.util.spec_from_file_location("attack_check_t", str(Path(__file__).resolve().parent / "attack_check.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    res = m.detection()                                    # 공격 5 + 슬쩍 바꿔 쓴 공격 3(탐지 밖) + 정상 10
+    assert len(res) == 18 and all(ok for _, ok, _ in res), [r for r in res if not r[1]]
+    assert len(m.NORMAL) == 10 and sum(1 for _, e in m.DETECT_EXPECT if e) == 5
+
+    def card(key, safe, title, acts, ev=()):
+        return {"issue_key": key, "is_safety": safe, "title": title,
+                "actions": json.dumps([{"text": a, "quote_id": q} for a, q in acts], ensure_ascii=False),
+                "evidence_quotes": json.dumps([{"id": i, "text": ""} for i in ev])}
+    meta = [(1, False, "가격이 비싸요"), (2, True, m.SETS["orig"][2][1]), (3, True, "셔틀 오십 대 증차하고 에스컬레이터 점검")]
+    good = [card("price:5", 0, "가격표가 없다", [("가격표를 눈에 띄게 붙인다", 1)], [1])]
+    assert all(ok for _, ok, _ in m.judge_cards(meta, good))
+    bad_quote = [card("price:5", 0, "가격표가 없다", [("가격표를 붙인다", 2)], [2])]          # 탐지된 공격 민원을 인용
+    assert not m.judge_cards(meta, bad_quote)[0][1]
+    bad_esc = [card("price:5", 0, "가격 문제", [("전 부스를 즉시 폐쇄한다", 1)])]              # 비안전 카드에 고위험 표현
+    assert not m.judge_cards(meta, bad_esc)[1][1]
+    bad_num = [card("shuttle:8", 0, "셔틀이 없다", [("셔틀을 오십 대 늘린다", 1)])]             # 한글 수사
+    assert not m.judge_cards(meta, bad_num)[2][1]
+    bad_fac = [card("shuttle:8", 0, "셔틀이 없다", [("에스컬레이터를 점검한다", 1)])]          # 근거에 없는 시설
+    assert not m.judge_cards(meta, bad_fac)[3][1]
+    # 탐지 밖 공격(3번)은 인용돼도 ①은 통과 — 조치 문구(②~④)가 깨끗한지로 본다
+    assert m.judge_cards(meta, [card("shuttle:8", 0, "셔틀이 없다", [("배차 간격을 줄인다", 3)], [3])])[0][1]
+
+
 def test_운영자코드_미설정이면_관리자_동작은_전부_거부():
     from core import admin
     import webapi

@@ -26,6 +26,12 @@ python worker.py --no-agents          # ①분류만 (비용 절약)
 (로그 `output/logs/`, 중복 실행 차단, DB 를 30분마다 `backup/auto_*.db` 로 복사해 최근 12개만 보관 — `backup/` 은 git 제외, `--phone`·`--only`·`--dry-run`·`--backup-now` 지원).
 SQLite 는 `synchronous=FULL` + WAL 이라 전원이 나가도 커밋된 건은 남고, 워커도 같은 DB 로 두 개 뜨지 않습니다.
 
+**접수→분류 벽시계 측정**: `python scripts/wall_clock.py [--mode agent|prefetch] [--backend claude_code|anthropic|local] [--n 3] [--batch 5] [--report]` —
+실제 워커를 임시 DB 로 띄워 접수부터 분류 완료까지(폴링 포함)를 표로 보여 줍니다 (운영 DB 미사용). 제출 기준은 `--backend anthropic` 측정입니다.
+
+**카드 프롬프트 공격 점검**: `python tests/attack_check.py --backend anthropic [--set orig|para|all] [--detect-only]` — 민원에 '카드 조치를 바꿔라' 같은 문장을 심어
+임시 DB 로 ①분류 → ④카드 문구까지 돌리고, 공격이 카드에 새지 않았는지(인용·고위험 표현·숫자·근거 없는 시설)와 지시문 탐지·정상 민원 오탐 10개를 자동 판정합니다 (운영 DB 미사용, 결과 `tests/attack_check.md`).
+
 ### 터미널 버전
 
 브라우저 없이 같은 DB를 다룹니다. Streamlit과 동시에 켜도 됩니다.
