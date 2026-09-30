@@ -116,6 +116,10 @@ class Agent:
     # 결과물이 하나여야 하는 에이전트용 — 저장 뒤 "보고" 호출 1회도 아낀다.
     # 보고 문장은 그 도구의 text 인자.
     finish_tool: str | None = None
+    # 도구를 한 단계 실행한 뒤 호출한다. 문자열을 돌려주면 그것을 결과로 끝낸다 (None 이면 계속).
+    # 같은 도구를 여러 번 불러야 해서 finish_tool 을 못 쓰는 에이전트용 — 예: 분류는 민원마다 저장을 부르므로
+    # 'db 에 대기 민원이 남지 않았다' 로 끝났음을 코드가 판단해, 모델이 '저장했습니다' 를 쓰는 호출 1번을 아낀다.
+    done_when: Callable[[], str | None] | None = None
 
     def _effort(self) -> str:
         return config.EFFORT.get(self.name, "medium")
@@ -244,6 +248,10 @@ class Agent:
                     **({"is_error": True} if is_error else {}),
                 })
 
+            if self.done_when:
+                finished = self.done_when()
+                if finished is not None:
+                    return finished
             messages.append({"role": "user", "content": results})
 
         if response is None:
@@ -382,6 +390,10 @@ class Agent:
                     if c.get("name") == self.finish_tool and not is_error:
                         return str(args.get("text") or payload).strip()
                     transcript += f"- {c.get('name')}{' (오류)' if is_error else ''}: {payload}\n"
+                if self.done_when:
+                    finished = self.done_when()
+                    if finished is not None:
+                        return finished
 
         db.log_agent(self.name, "cli_failed", user_input[:120],
                      f"{self.max_steps}단계 안에 끝내지 못함")

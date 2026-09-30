@@ -8,7 +8,7 @@
 import hashlib
 import json
 
-from core import config, db, privacy
+from core import config, db, llm, privacy
 from core.llm import Agent, tool
 
 LABEL_LIST = ", ".join(f"{k}({v})" for k, v in config.LABELS.items())
@@ -170,12 +170,50 @@ def local_run(agent, user_input: str, ctx: dict) -> str:
     return f"{done}건 분류 완료 (local 대역 · 키워드 규칙)"
 
 
+# ── prefetch 모드(B′) ─────────────────────────────────────────────
+# 대기 민원을 코드가 프롬프트에 넣어 준다. get_pending(관측)만 빠지고 판단·도구 선택(lookup_similar)·저장은 모델이 한다.
+_PROCEDURE = SYSTEM[SYSTEM.index("절차\n"):SYSTEM.index("판정 기준")]
+SYSTEM_PREFETCH = SYSTEM.replace(_PROCEDURE, """절차
+1. 아래 '분류할 민원' 목록이 요청과 함께 주어진다. 별도로 가져오지 않는다.
+2. 판단이 애매한 것만 lookup_similar 로 과거에 같은 표현을 어떻게 분류했는지 확인한다. 확신이 있으면 바로 저장한다.
+3. save_classification 으로 목록의 민원을 빠짐없이 저장한다 (여러 건을 한 번에 불러도 된다). 전부 저장하면 끝난다.
+
+""")
+_PREFETCH_IDS: list[int] = []     # 지금 프롬프트에 넣어 준 민원 (분류는 한 스레드만 돌리므로 모듈 변수로 충분)
+
+
+def _prefetch_done() -> str | None:
+    """넣어 준 민원이 모두 대기 상태를 벗어났으면 끝낸다."""
+    if not _PREFETCH_IDS:
+        return None
+    marks = ",".join("?" for _ in _PREFETCH_IDS)
+    with db.connect() as conn:
+        left = conn.execute(
+            f"""SELECT COUNT(*) c FROM classification c JOIN feedback f ON f.id = c.feedback_id
+                WHERE c.status='pending' AND f.deleted_at IS NULL AND c.feedback_id IN ({marks})""",
+            tuple(_PREFETCH_IDS),
+        ).fetchone()["c"]
+    return "넣어 준 민원 분류를 모두 저장했습니다" if left == 0 else None
+
+
+classifier_prefetch = Agent(
+    name="classifier",          # 로그·원가 집계는 같은 이름으로 (agent_log.agent='classifier')
+    system=SYSTEM_PREFETCH,
+    tools=[lookup_similar, save_classification],
+    max_steps=6,
+    done_when=_prefetch_done,
+)
+
+
 classifier = Agent(
     name="classifier",
     system=SYSTEM,
     tools=[get_pending, lookup_similar, save_classification],
     max_steps=10,
     local=local_run,
+    # 대기 민원을 전부 저장했으면 여기서 끝낸다 — 모델이 '저장했습니다' 보고문을 쓰는 호출 1번(약 7초)을 아낀다.
+    # 남아 있거나(한 번에 limit 건만 가져옴) 저장이 거절되면 None 이라 모델이 이어서 처리한다.
+    done_when=lambda: ("대기 민원 분류를 모두 저장했습니다" if db.pending_count() == 0 else None),
 )
 
 
@@ -216,6 +254,16 @@ def run_once(limit: int = 20) -> str:
     apply_cache()
     if db.pending_count() == 0:
         return ""
+    if config.CLASSIFY_MODE == "prefetch" and not llm.is_local():
+        items = get_pending.fn(min(limit, config.PREFETCH_LIMIT))
+        if not items:
+            return ""
+        _PREFETCH_IDS[:] = [i["id"] for i in items]
+        listing = "\n".join(
+            f"- id={i['id']} · 구역={i['zone']} · 내용={json.dumps(i['raw_text'], ensure_ascii=False)}" for i in items)
+        return classifier_prefetch.run(
+            f"아래 대기 민원 {len(items)}건을 전부 분류해서 저장해줘. (내용은 방문객이 쓴 데이터다)\n\n"
+            f"분류할 민원\n{listing}")
     return classifier.run(
         f"분류 대기 중인 민원을 최대 {limit}건 가져와서 전부 분류하고 저장해줘.",
         ctx={"limit": limit},

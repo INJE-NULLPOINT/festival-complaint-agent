@@ -188,4 +188,11 @@ PLACE_ALIASES = {
 ESCALATION_WORDS = ["중단", "폐쇄", "대피", "진입 통제", "출입 통제", "전면 통제", "통행 통제", "입장 통제",
                     "출동", "119", "112", "경찰", "소방", "구급"]
 
+# ① 분류의 실행 방식 (claude_code·anthropic 경로에만 해당, local 대역은 무관). 기본값은 'agent' — 바꾸려면 이 한 줄.
+#   agent    에이전트가 get_pending → (애매하면 lookup_similar) → save 를 스스로 부른다 (호출 2번, done_when 으로 보고 호출 생략)
+#   prefetch 대기 민원을 코드가 프롬프트에 넣어 준다. 모델은 애매할 때만 lookup_similar 를 부르고 save 한다 (호출 1~2번)
+# 환경변수 CLASSIFY_MODE 로도 바꿀 수 있다 (실험용). 기본값을 바꾸지 말 것 — 바꾸기 전에 정확도·TC5 를 다시 잰다.
+CLASSIFY_MODE = os.getenv("CLASSIFY_MODE", "agent").strip().lower()
+PREFETCH_LIMIT = 10     # prefetch 모드에서 한 번에 프롬프트에 넣는 민원 수 (출력 토큰이 건수에 비례)
+
 CARD_TEXT_MIN_INTERVAL = 60   # 같은 카드의 문구를 다시 쓰는 최소 간격(초). 등급·조치 그룹이 바뀌면 즉시
