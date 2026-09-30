@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>축제 민원 관제</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <span class="dot" aria-hidden="true"></span>
+        <strong>축제 민원 관제</strong>
+        <span class="live" id="live">연결 중</span>
+      </div>
+      <nav class="tabs" id="tabs">
+        <a href="#control" data-route="control">관제</a>
+        <a href="#action" data-route="action">조치</a>
+        <a href="#report" data-route="report">접수</a>
+      </nav>
+    </header>
+    <!-- JS 가 못 돌 때의 안내 (D5-27). CSS 도 안 불러와졌을 수 있어 스타일은 인라인으로 둔다.
+         구형 브라우저에서도 읽혀야 하므로 아래 스크립트는 ES5 문법만 쓴다. -->
+    <div id="boot-msg" role="alert" hidden
+         style="margin:16px;padding:14px 16px;border:2px solid #000;background:#fff;color:#000;font:16px/1.6 sans-serif">
+      화면을 불러오지 못했습니다.<br />브라우저를 최신으로 업데이트하거나 Chrome 으로 열어 주세요.
+    </div>
+    <noscript>
+      <div style="margin:16px;padding:14px 16px;border:2px solid #000;background:#fff;color:#000;font:16px/1.6 sans-serif">
+        JavaScript 가 꺼져 있어 화면을 열 수 없습니다. 브라우저 설정에서 JavaScript 를 켜 주세요.
+      </div>
+    </noscript>
+    <main id="app"></main>
+    <div id="toasts" aria-live="polite"></div>
+    <!-- type="module" 을 모르는 브라우저만 이 스크립트를 실행한다 -->
+    <script nomodule>
+      document.getElementById("boot-msg").hidden = false;
+    </script>
+    <script>
+      // 모듈 스크립트가 문법 오류 등으로 중간에 멈추면 #app 이 끝내 비어 있다.
+      // 몇 초 기다려도 비어 있을 때만 안내를 띄우고, 화면이 그려지면 다시 숨긴다.
+      (function () {
+        var msg = document.getElementById("boot-msg");
+        var tries = 0;
+        function drawn() {
+          var app = document.getElementById("app");
+          return !!(app && app.children.length);
+        }
+        var timer = setInterval(function () {
+          tries += 1;
+          if (drawn()) { msg.hidden = true; clearInterval(timer); return; }
+          if (tries >= 8) msg.hidden = false;   // 약 8초
+          if (tries >= 60) clearInterval(timer);
+        }, 1000);
+        // 스크립트 오류가 나면 8초를 기다리지 않고 바로 한 번 확인한다.
+        // 파일을 못 받은 오류는 <script> 요소에서만 나고 위로 전달되지 않으므로 캡처 단계(true)로 듣는다.
+        // 글꼴 CDN 이 안 열리는 것 같은 다른 리소스 오류에는 반응하지 않는다.
+        window.addEventListener("error", function (e) {
+          var t = e && e.target;
+          if (t !== window && !(t && t.tagName === "SCRIPT")) return;
+          setTimeout(function () { if (!drawn()) msg.hidden = false; }, 1500);
+        }, true);
+      })();
+    </script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,14 @@
+.env
+festival.db*
+__pycache__/
+*.pyc
+output/
+
+# tests/testcase_report.md 는 제출용 테스트 증거이므로 커밋합니다
+# seed/dev_sample.csv 는 개발용 합성 데이터입니다
+.todo_state.json
+
+# 웹 앱
+web/node_modules/
+web/dist/
+web/.env
