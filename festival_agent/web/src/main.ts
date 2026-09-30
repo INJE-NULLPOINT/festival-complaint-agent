@@ -3,20 +3,24 @@
 //   ?v=qr     방문객용 — 상단 탭을 숨기고 접수 화면만 보인다.
 import "./style.css";
 import "./conn.css";
+import "./layout.css";
 import { api, onHeaderMeta } from "./data";
 import { LABELS, resetFresh, stateBox, toast } from "./ui";
 import { renderAction } from "./views/action";
 import { renderControl } from "./views/control";
+import { renderQr } from "./views/qr";
 import { renderReport } from "./views/report";
 
 const app = document.getElementById("app")!;
 const live = document.getElementById("live")!;
 const visitor = new URLSearchParams(location.search).get("v") === "qr";
 
+const TITLES: Record<string, string> = { control: "관제", action: "조치", report: "접수 QR" };
 const views: Record<string, (root: HTMLElement) => Promise<void>> = {
   control: renderControl,
   action: renderAction,
-  report: renderReport,
+  // 관리자의 '접수 QR' 는 QR 만들기 화면, 방문객(?v=qr)은 접수 화면이다 (둘 다 경로 이름은 report)
+  report: visitor ? renderReport : renderQr,
 };
 
 function route(): string {
@@ -33,9 +37,13 @@ async function draw(): Promise<void> {
   if (drawing) { again = true; return; }
   drawing = true;
   const r = route();
-  document.querySelectorAll<HTMLAnchorElement>("#tabs a").forEach((a) =>
-    a.classList.toggle("on", a.dataset.route === r),
-  );
+  document.querySelectorAll<HTMLAnchorElement>("#tabs a").forEach((a) => {
+    const on = a.dataset.route === r;
+    a.classList.toggle("on", on);
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
+  const title = document.getElementById("page-title");
+  if (title) title.textContent = TITLES[r] ?? "";
   // 처음 열거나 탭을 옮길 때만 'enter'. SSE 로 다시 그릴 때는 붙이지 않아 깜빡이지 않는다.
   const entering = r !== shown;
   if (entering) { clearTimeout(enterTimer); app.classList.add("enter"); resetFresh(); }
@@ -127,6 +135,25 @@ function subscribe(): void {
   });
 }
 
+// 관리자 화면 뼈대: 사이드바 · 햄버거(좁은 화면) · 본문 제목 줄. 방문객 화면에는 아예 만들지 않는다 (DOM 에서 지운다).
+if (visitor) {
+  for (const id of ["side", "side-scrim", "menu-btn", "page-head"]) document.getElementById(id)?.remove();
+} else {
+  const menuBtn = document.getElementById("menu-btn")!;
+  const scrim = document.getElementById("side-scrim")!;
+  const setMenu = (open: boolean) => {
+    document.body.classList.toggle("side-open", open);
+    scrim.hidden = !open;
+    menuBtn.setAttribute("aria-expanded", String(open));
+    menuBtn.setAttribute("aria-label", open ? "메뉴 닫기" : "메뉴 열기");
+  };
+  menuBtn.addEventListener("click", () => setMenu(!document.body.classList.contains("side-open")));
+  scrim.addEventListener("click", () => setMenu(false));
+  document.getElementById("tabs")!.addEventListener("click", (e) => { if ((e.target as HTMLElement).closest("a")) setMenu(false); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && document.body.classList.contains("side-open")) { setMenu(false); menuBtn.focus(); } });
+  // 사이드바에 축제 이름 (못 받으면 기본 이름 유지)
+  api.festival().then((name) => { if (name) document.getElementById("side-name")!.textContent = name; }).catch(() => {});
+}
 if (visitor) {
   document.body.classList.add("visitor");
   // 방문객에게는 "축제 민원 관제" 대신 축제 이름을 보인다 (실패하면 기본 제목 유지)

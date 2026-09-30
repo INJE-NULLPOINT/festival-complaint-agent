@@ -8,7 +8,9 @@ const port = process.env.WEBAPI_PORT ?? "8765";
 const proxy = { "/api": { target: `http://127.0.0.1:${port}`, xfwd: true } };
 
 export default defineConfig({
-  server: { proxy },
+  // VITE_NO_WATCH=1 (시험용): 파일 변경을 지켜보지 않는다. 여러 세션이 web/src 를 동시에 고치는 중에 시험을 돌리면 개발 서버가 페이지를 통째로
+  // 새로고침해 펼침 상태 같은 화면 상태가 사라지고 점검이 간혹 실패했다 (D5-46). 요청할 때마다 최신 파일을 주므로 시험 결과는 그대로다.
+  server: { proxy, watch: process.env.VITE_NO_WATCH ? null : undefined },
   // `npm run phone` (빌드 후 preview) 도 개발 서버와 같은 프록시를 쓴다
   preview: { proxy },
   build: {

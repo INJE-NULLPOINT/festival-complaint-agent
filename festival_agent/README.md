@@ -6,53 +6,55 @@
 
 ## 실행
 
+서버는 TypeScript 이고 **Node 24 이상**에서 빌드 없이 바로 실행합니다 (Python 불필요). 명령은 `festival_agent/` 에서 칩니다.
+
 ```bash
-pip install -r requirements.txt
+npm install --prefix server
 
 # 1) API 키 설정
 cp .env.example .env      # ANTHROPIC_API_KEY 채우기
 #   또는  ant auth login   (프로필을 SDK가 자동으로 읽습니다)
 
-# 2) 화면
-streamlit run app.py
+# 2) 서버·워커·웹 화면 한 번에 (감시·자동 재시작·30분 백업)
+node server/scripts/run_all_servers.ts      # webapi(8765) + worker + 웹(5173) → http://localhost:5173
 
-# 3) 에이전트 워커 — 별도 터미널에서
-python worker.py                      # Fast 3초 / Agent 60초
-python worker.py --agent-interval 20  # 시연용 (반응 빠르게)
-python worker.py --no-agents          # ①분류만 (비용 절약)
+# 3) 따로 켤 때 — 워커만 (별도 터미널)
+node server/worker.ts                      # Fast 3초 / Agent 60초
+node server/worker.ts --agent-interval 20  # 시연용 (반응 빠르게)
+node server/worker.ts --no-agents          # ①분류만 (비용 절약)
 ```
 
-**멈춤 대비 — 서버 일괄 실행**: `python scripts/run_all_servers.py` 한 줄이 webapi·worker·vite 를 분리 프로세스로 띄우고, 죽으면 2→60초 간격으로 다시 띄웁니다
+**멈춤 대비 — 서버 일괄 실행**: `node server/scripts/run_all_servers.ts` 한 줄이 webapi·worker·vite 를 분리 프로세스로 띄우고, 죽으면 2→60초 간격으로 다시 띄웁니다
 (로그 `output/logs/`, 중복 실행 차단, DB 를 30분마다 `backup/auto_*.db` 로 복사해 최근 12개만 보관 — `backup/` 은 git 제외, `--phone`·`--only`·`--dry-run`·`--backup-now` 지원).
 SQLite 는 `synchronous=FULL` + WAL 이라 전원이 나가도 커밋된 건은 남고, 워커도 같은 DB 로 두 개 뜨지 않습니다.
 
-**접수→분류 벽시계 측정**: `python scripts/wall_clock.py [--mode agent|prefetch] [--backend claude_code|anthropic|local] [--n 3] [--batch 5] [--report]` —
+**접수→분류 벽시계 측정**: `node server/scripts/wall_clock.ts [--mode agent|prefetch] [--backend claude_code|anthropic|local] [--n 3] [--batch 5] [--report]` —
 실제 워커를 임시 DB 로 띄워 접수부터 분류 완료까지(폴링 포함)를 표로 보여 줍니다 (운영 DB 미사용). 제출 기준은 `--backend anthropic` 측정입니다.
 
-**카드 프롬프트 공격 점검**: `python tests/attack_check.py --backend anthropic [--set orig|para|all] [--detect-only]` — 민원에 '카드 조치를 바꿔라' 같은 문장을 심어
+**카드 프롬프트 공격 점검**: `node server/tests/attack_check.ts --backend anthropic [--set orig|para|all] [--detect-only]` — 민원에 '카드 조치를 바꿔라' 같은 문장을 심어
 임시 DB 로 ①분류 → ④카드 문구까지 돌리고, 공격이 카드에 새지 않았는지(인용·고위험 표현·숫자·근거 없는 시설)와 지시문 탐지·정상 민원 오탐 10개를 자동 판정합니다 (운영 DB 미사용, 결과 `tests/attack_check.md`).
 
 ### 터미널 버전
 
-브라우저 없이 같은 DB를 다룹니다. Streamlit과 동시에 켜도 됩니다.
+브라우저 없이 같은 DB를 다룹니다. 웹 화면과 동시에 켜도 됩니다.
 
 ```bash
-python cli.py watch --drive             # 실시간 모니터 (워커 없이 단독 구동)
-python cli.py status                    # 현재 상태 스냅샷
-python cli.py submit "진입로가 어두워요"  # 민원 접수
-python cli.py cycle                     # ①②③④ 한 바퀴
-python cli.py replay start --speed 300  # 리플레이
-python cli.py db tables | log | feed    # DB 조회
-python cli.py check                     # 백엔드·API 키 확인
-python cli.py reset --all               # 초기화
+node server/cli.ts watch --drive             # 실시간 모니터 (워커 없이 단독 구동)
+node server/cli.ts status                    # 현재 상태 스냅샷
+node server/cli.ts submit "진입로가 어두워요"  # 민원 접수
+node server/cli.ts cycle                     # ①②③④ 한 바퀴
+node server/cli.ts replay start --speed 300  # 리플레이
+node server/cli.ts db tables | log | feed    # DB 조회
+node server/cli.ts check                     # 백엔드·API 키 확인
+node server/cli.ts reset --all               # 초기화
 ```
 
 ### 실시간으로 보기
 
 ```bash
-python cli.py reset --all
-python cli.py replay start --speed 20000
-python cli.py --window 5835 watch --drive --interval 2
+node server/cli.ts reset --all
+node server/cli.ts replay start --speed 20000
+node server/cli.ts --window 5835 watch --drive --interval 2
 ```
 
 화면이 2초마다 다시 그려지면서 민원이 쌓이고 순위가 바뀌는 과정이 보입니다.
@@ -85,15 +87,14 @@ python cli.py --window 5835 watch --drive --interval 2
 ### 시연·개발 (API 키 없이도 됨)
 
 ```bash
-python scripts/make_dev_seed.py       # 개발용 샘플 120건 생성
-python cli.py demo --stub             # 투입 → 분류 → 판정까지 한 번에
+node server/scripts/make_dev_seed.ts       # 개발용 샘플 120건 생성
+LLM_BACKEND=local node server/cli.ts demo  # 투입 → 분류 → 판정까지 한 번에 (LLM 없이)
 ```
 그 다음 **조치 화면 → 리플레이 → ▶ 시작**을 누르면 민원이 배속으로 쏟아지고,
 관제 화면에서 **건수 1위(주차)와 심각도 1위(안전)가 갈리는 장면**을 볼 수 있습니다.
 
-> `scripts/stub_classify.py` 는 **개발 도구이지 제품이 아닙니다.**
-> 제출물에서 분류는 ①분류 에이전트가 수행하며, 스텁 처리분은
-> `agent_note='STUB(개발용)'` 으로 표시됩니다.
+> `LLM_BACKEND=local` 은 키워드 규칙(`server/core/rules.ts`)으로 도는 **개발용 대역이지 제품이 아닙니다.**
+> 제출물에서 분류는 ①분류 에이전트(Claude)가 수행합니다.
 
 브라우저에서 사이드바의 **접수 → 관제 → 조치** 순으로 확인하세요.
 접수 화면에서 민원을 넣으면 워커가 3초 안에 집어가고, 관제 화면이 5초마다 갱신됩니다.
@@ -101,19 +102,19 @@ python cli.py demo --stub             # 투입 → 분류 → 판정까지 한 �
 관광공사 API (선택):
 ```bash
 # .env 에 TOURAPI_KEY 를 넣은 뒤
-python scripts/seed_festival.py --list        # 경남 축제 목록
-python scripts/seed_festival.py --pick 유등    # 대상 축제 설정
+node server/scripts/seed_festival.ts --list        # 경남 축제 목록
+node server/scripts/seed_festival.ts --pick 유등    # 대상 축제 설정
 ```
-키가 없어도 시스템은 그대로 동작합니다 (`core/config.py`의 수기 시드 사용).
+키가 없어도 시스템은 그대로 동작합니다 (`server/core/config.ts`의 수기 시드 사용).
 
 테스트:
 ```bash
-python scripts/final_check.py        # 전부 한 번에 (약 7분, LLM 호출 없음) → tests/final_check.md 에 표 1장
+node server/scripts/final_check.ts        # 전부 한 번에 (약 7분, LLM 호출 없음) → tests/final_check.md 에 표 1장
 ```
-순서: 단위(`tests/test_severity.py`) → 시나리오 5종(`tests/test_scenarios.py`) → Streamlit(`tests/streamlit_check.py --backend local`) →
-웹 타입 검사(tsc) → 화면·서버 전체(`tests/ui/run_all.mjs`: 방문객·관리자·연결 끊김·속도·보안·모바일·빌드본) → 제출물 제외 확인(.env·*.db·키 등이 git 에 없는지).
-운영 DB 는 쓰지 않고(시험마다 복사본·별도 포트), 제출용 기록(`testcase_report.md`·`streamlit_check.md`)은 끝나면 원래 내용으로 돌려놓습니다.
-일부만: `--only=unit,tsc` · `--skip=ui`. 개별 시험·실제 LLM 호출(`python tests/test_scenarios.py --live`)은 필요할 때 따로 돌립니다 —
+순서: 단위(`server/tests/*.test.ts`) → 시나리오 5종(`server/scripts/testcase_report.ts`) →
+웹 타입 검사(tsc) → 화면·서버 전체(`tests/ui/run_all.ts`: 방문객·관리자·연결 끊김·속도·보안·모바일·빌드본) → 제출물 제외 확인(.env·*.db·키 등이 git 에 없는지).
+운영 DB 는 쓰지 않고(시험마다 복사본·별도 포트), 제출용 기록(`testcase_report.md`)은 끝나면 원래 내용으로 돌려놓습니다.
+일부만: `--only=unit,tsc` · `--skip=ui`. 개별 시험·실제 LLM 호출(`node server/scripts/testcase_report.ts --live`)은 필요할 때 따로 돌립니다 —
 `tests/testcase_report.md` 가 **제출용 테스트 증거**입니다. 화면 시험 상세는 `tests/ui/README.md`.
 
 ---
@@ -123,10 +124,10 @@ python scripts/final_check.py        # 전부 한 번에 (약 7분, LLM 호출 �
 `../할일.md` 는 손으로 관리하지 않습니다. 시스템 상태를 직접 확인해 다시 그립니다.
 
 ```bash
-python cli.py todo             # 지금 상태로 다시 그리기
-python cli.py todo --show      # 파일에 쓰지 않고 출력만
-python cli.py todo --watch     # 파일을 고칠 때마다 즉시 재판정
-python worker.py               # 에이전트가 한 바퀴 돌 때마다 자동 갱신
+node server/cli.ts todo             # 지금 상태로 다시 그리기
+node server/cli.ts todo --show      # 파일에 쓰지 않고 출력만
+node server/cli.ts todo --watch     # 파일을 고칠 때마다 즉시 재판정
+node server/worker.ts               # 에이전트가 한 바퀴 돌 때마다 자동 갱신
 ```
 
 | 종류 | 동작 |
@@ -146,30 +147,37 @@ python worker.py               # 에이전트가 한 바퀴 돌 때마다 자동
 
 ## 웹 앱 (Supabase + TypeScript)
 
-Streamlit 과 같은 DB 를 보는 단일 페이지 화면입니다. 워커는 그대로 돌리고,
+관리자·방문객 화면은 이 웹 앱 하나입니다(Streamlit 화면은 2026-10-01 에 뺐습니다). 워커는 그대로 돌리고,
 웹은 실시간 구독으로 바뀐 부분만 다시 그립니다.
 
-### 키 없이 — local 대역 (지금 상태)
+### 지금 구성 — Supabase (2026-09-30 연결)
 
-LLM 대역과 같은 방식입니다. `web/.env` 가 없으면 웹은 `webapi.py`(SQLite 위에서
-Supabase RPC·Realtime·Storage 를 흉내 내는 서버)에 붙습니다. 헤더에 `local 대역` 이 표시됩니다.
+워커(`.env` 의 `SUPABASE_DB_URL`)와 웹(`web/.env` 의 `VITE_SUPABASE_URL`·`VITE_SUPABASE_ANON_KEY`)이 모두 Supabase 에 붙어 있습니다.
+스키마·RLS·RPC·Storage `docs` 버킷을 적용했고 운영자 코드 해시를 등록했습니다. 웹 헤더에 `실시간 · Supabase` 가 뜹니다.
+연결을 다시 만들거나 새 프로젝트로 옮길 때는 아래 'Supabase 연결 방법'을 따릅니다.
+
+### 개발·테스트용 — local 대역 (`webapi.ts`)
+
+LLM 대역과 같은 방식입니다. `web/.env` 가 없으면 웹은 `webapi.ts`(SQLite 위에서
+Supabase RPC·Realtime·Storage 를 흉내 내는 서버)에 붙습니다. 헤더에 `실시간 · 로컬 DB` 가 표시됩니다.
+화면 점검(`tests/ui/run_all.ts`)·시나리오·정확도·시연 스크립트는 운영 데이터를 건드리지 않으려고 이 대역(임시 SQLite)으로 돕니다.
 
 ```bash
-python worker.py                 # 터미널 1 — 웹 접수 수거 · 분류 · 조치요청서 작성
-python webapi.py                 # 터미널 2 — local 대역 API (127.0.0.1:8765)
+node server/worker.ts                 # 터미널 1 — 웹 접수 수거 · 분류 · 조치요청서 작성
+node server/webapi.ts                 # 터미널 2 — local 대역 API (127.0.0.1:8765)
 cd web && npm install && npm run dev   # 터미널 3 — http://localhost:5173
 ```
 
-| Supabase | local 대역 (`webapi.py`) |
+| Supabase | local 대역 (`webapi.ts`) |
 |---|---|
 | PostgREST 읽기 | `GET /api/zones` · `/api/control` · `/api/action` |
 | RPC 6개 (`schema.sql`) | `POST /api/rpc/<이름>` — 관리자 동작 5개는 운영자 코드 필요(아래 '운영자 코드'), 검증 규칙 동일 (한글·영문·숫자 2개 이상 · 500자 이하 · 구역 존재 · `department_map` 기준 · 없는 민원 id 는 오류 · 서울 시각) |
 | Realtime | `GET /api/events` (SSE, 1초 지문 비교) |
 | Storage `docs` 버킷 | `GET /api/docs/<파일명>` — `output/` 의 DOCX (경로 탈출 차단) |
 
-`webapi.py` 는 지우지 않습니다. 키가 들어가면 웹이 더 이상 부르지 않을 뿐입니다.
+`webapi.ts` 는 지우지 않습니다. Supabase 로 연결된 지금은 웹이 부르지 않고, 개발·테스트용으로만 씁니다.
 
-### Supabase 로 전환 — 키가 생기면 (코드 수정 없음)
+### Supabase 연결 방법 (다시 설정할 때 · 코드 수정 없음)
 
 1. **스키마** — Supabase 대시보드 > SQL Editor 에 `supabase/schema.sql` 전체를 붙여 넣고 Run.
    테이블(`issue`·`operator_secret` 포함) · RLS · RPC 6개 · Realtime · Storage `docs` 버킷이 만들어집니다. 여러 번 실행해도 안전합니다.
@@ -184,11 +192,11 @@ cd web && npm install && npm run dev   # 터미널 3 — http://localhost:5173
 5. **확인**
 
 ```bash
-pip install -r requirements.txt
-python cli.py db tables          # Supabase 테이블이 보이면 워커 연결 OK
-python worker.py
+npm install --prefix server
+node server/cli.ts db tables          # Supabase 테이블이 보이면 워커 연결 OK
+node server/worker.ts
 cd web && npm run dev            # 헤더가 "실시간 · Supabase" 로 바뀌면 웹 연결 OK
-python cli.py todo               # D5-6 · D5-9 가 자동으로 체크됩니다
+node server/cli.ts todo               # D5-6 · D5-9 가 자동으로 체크됩니다
 ```
 
 되돌리려면 두 `.env` 의 Supabase 값을 비우고 재시작하면 local 대역으로 돌아갑니다.
@@ -228,17 +236,17 @@ Windows 방화벽이 포트를 막으면 처음 한 번 허용해야 합니다. 
 
 ```powershell
 $env:DB_PATH = "output/verify.db"      # 처음 쓰는 파일이면 자동으로 만들어집니다
-python worker.py                       # 터미널 1
-python webapi.py                       # 터미널 2 (각 터미널마다 위 한 줄을 먼저)
+node server/worker.ts                       # 터미널 1
+node server/webapi.ts                       # 터미널 2 (각 터미널마다 위 한 줄을 먼저)
 cd web; npm run phone                  # 터미널 3 — 폰은 http://<PC IP>:4173/?v=qr
 ```
 
-운영자 코드(`ADMIN_CODE`)는 그대로 `.env` 에서 읽습니다. 참여자가 넣은 민원은 `python cli.py db show <번호>` 로 추적합니다
+운영자 코드(`ADMIN_CODE`)는 그대로 `.env` 에서 읽습니다. 참여자가 넣은 민원은 `node server/cli.ts db show <번호>` 로 추적합니다
 (웹 접수 창의 `W-번호` 도 같은 번호로 찾힙니다). `SUPABASE_DB_URL` 이 켜져 있으면 DB 가 Supabase 이므로 비워 두고 돌립니다.
 검증용 문장은 사람이 직접 쓴 것이라 합성이 아닙니다 — 시연용 합성 시나리오와 DB 파일을 섞지 마세요.
 
-**시연 영상용 합성 시나리오**: `python scripts/demo_scenario.py --dry-run` 으로 계획만 보고,
-`python scripts/demo_scenario.py --reset --lead 120` 으로 `output/demo_festival.db` 에 배경 가상 민원 24건(`source='demo'`)을 넣은 뒤
+**시연 영상용 합성 시나리오**: `node server/scripts/demo_scenario.ts --dry-run` 으로 계획만 보고,
+`node server/scripts/demo_scenario.ts --reset --lead 120` 으로 `output/demo_festival.db` 에 배경 가상 민원 24건(`source='demo'`)을 넣은 뒤
 T+40·T+50초에 유등터널 혼잡 2건을 예약 투입합니다 (운영 DB 는 거부). 전부 지어낸 문장이라 영상에 합성임을 밝혀야 합니다.
 
 ### 운영자 코드 (관리자 동작 보호, D5-31)
@@ -246,7 +254,7 @@ T+40·T+50초에 유등터널 혼잡 2건을 예약 투입합니다 (운영 DB �
 로그인이 없어서, 코드가 없으면 주소를 아는 누구나 민원을 지우거나 조치 상태를 바꿀 수 있습니다.
 그래서 아래 네 가지는 **운영자 코드**가 맞을 때만 실행됩니다. 방문객이 쓰는 것은 접수(`submit_feedback`) 하나뿐이고 코드가 필요 없습니다.
 
-| 관리자 동작 | local 대역(`webapi.py`) · Streamlit | Supabase RPC |
+| 관리자 동작 | local 대역(`webapi.ts`) | Supabase RPC |
 |---|---|---|
 | 민원 지우기·되돌리기 | `delete_feedback` · `restore_feedback` | 같은 이름 + `p_code` |
 | 조치 상태 변경 | `set_action_status` | 같은 이름 + `p_code` |
@@ -255,10 +263,9 @@ T+40·T+50초에 유등터널 혼잡 2건을 예약 투입합니다 (운영 DB �
 
 **코드 정하는 법 — 값은 직접 정해 아래 두 곳에만 넣습니다. 채팅·문서·커밋에 적지 마세요.** 길고 추측하기 어려운 값이 좋습니다.
 
-1. **local 대역·Streamlit**: `festival_agent/.env` 의 `ADMIN_CODE=` 뒤에 값을 넣고 `webapi.py` 와 Streamlit 을 다시 켭니다.
-   - 비워 두면 관리자 동작이 **전부 거부**됩니다 (열린 채로 시작하지 않음). `webapi.py` 시작 때 경고가 나옵니다.
+1. **local 대역**: `festival_agent/.env` 의 `ADMIN_CODE=` 뒤에 값을 넣고 `webapi.ts`(또는 `run_all_servers.ts`)를 다시 켭니다.
+   - 비워 두면 관리자 동작이 **전부 거부**됩니다 (열린 채로 시작하지 않음). `webapi.ts` 시작 때 경고가 나옵니다.
    - 웹은 요청 헤더 `X-Admin-Code` (또는 본문 `p_code`)로 보냅니다. 없으면 401, 틀리면 401, 코드 미설정이면 403, 잠기면 429 입니다.
-   - Streamlit 조치 화면은 사이드바에 코드를 넣어야 요청서 생성·상태 변경·리플레이 조작이 열립니다 (조회·DOCX 내려받기는 코드 없이).
 2. **Supabase**: `supabase/schema.sql` 을 다시 실행한 뒤, SQL Editor 에서 **한 번만** 다음 문장을 실행합니다 (`<운영자 코드>` 자리에 값을 넣습니다. 이 문장을 파일에 저장하지 마세요).
 
    ```sql
@@ -278,8 +285,8 @@ T+40·T+50초에 유등터널 혼잡 2건을 예약 투입합니다 (운영 DB �
 없는 민원·잘못된 상태 같은 검증 오류는 코드를 통과한 뒤의 일이라 예외 그대로입니다. 예전 시그니처(코드 인자 없음)는 `schema.sql` 이 지웁니다.
 
 **한계**: 공유 코드라 누가 했는지는 구분하지 못하고(조치 기록에는 '운영자'로만 남음), 코드가 새면 바꿔야 합니다. 읽기는 여전히 열려 있습니다
-(원문은 접수 때 마스킹됨). 휴대폰으로 시연하려고 `webapi.py` 를 `--host 0.0.0.0` 으로 열면 같은 와이파이의 누구나 닿으므로 그때 이 코드가 실제로 필요해집니다.
-키가 생기면 Supabase Auth(가입 차단) + RPC 안의 `auth.uid()` 검사로 바꿀 수 있습니다.
+(원문은 접수 때 마스킹됨). 휴대폰으로 시연하려고 `webapi.ts` 를 `--host 0.0.0.0` 으로 열면 같은 와이파이의 누구나 닿으므로 그때 이 코드가 실제로 필요해집니다.
+나중에 Supabase Auth(가입 차단) + RPC 안의 `auth.uid()` 검사로 바꿀 수 있습니다.
 
 ## 백엔드 전환
 
@@ -297,8 +304,8 @@ T+40·T+50초에 유등터널 혼잡 2건을 예약 투입합니다 (운영 DB �
 `claude_code` 는 도구 명세를 시스템 프롬프트에 넣고, 모델이 JSON(`tool_calls` / `final`)으로
 고른 도구를 우리 코드가 실행해 결과를 다음 입력에 붙입니다. 루프·도구·로그는 API 경로와 같고,
 `agent_log` 에는 `cli_call` 로 남아 제출 검증(D5-2, `api_call`)과 섞이지 않습니다.
-구독 사용량을 쓰므로 worker 상시 구동보다 `cli.py cycle` 1회·`measure_accuracy --limit` 소량으로 확인하세요. 지금 어떤 백엔드로 도는지는
-`python cli.py check`, `python cli.py status`, 관제 화면 사이드바에 표시됩니다.
+구독 사용량을 쓰므로 worker 상시 구동보다 `cli.ts cycle` 1회·`measure_accuracy --limit` 소량으로 확인하세요. 지금 어떤 백엔드로 도는지는
+`node server/cli.ts check`, `node server/cli.ts status`, 관제 화면 사이드바에 표시됩니다.
 
 ### local 대역이 하는 일
 
@@ -308,7 +315,7 @@ T+40·T+50초에 유등터널 혼잡 2건을 예약 투입합니다 (운영 DB �
 
 | 에이전트 | 실제 모델 | local 대역 |
 |---|---|---|
-| ①분류 | 문장을 읽고 유형·강도·안전여부 판정 | `core/rules.py` 키워드 규칙 |
+| ①분류 | 문장을 읽고 유형·강도·안전여부 판정 | `server/core/rules.ts` 키워드 규칙 |
 | ②감시 | 어떤 창을 볼지, 무엇을 알릴지 판단 | 전 유형 점수화 후 규칙대로 알림 |
 | ③조치 | 대표성 있는 원문 선별, 조치 제안 작성 | 구역 분산 + 신뢰도 기준 선별, 템플릿 제안 |
 | ④통합 | 결론이 엇갈릴 때 조정하고 문장 작성 | 우선순위 1위를 따르고 템플릿 조립 |
@@ -330,44 +337,44 @@ T+40·T+50초에 유등터널 혼잡 2건을 예약 투입합니다 (운영 DB �
 
 ```
 festival_agent/
-├─ app.py                 홈 (상태 확인)
-├─ pages/
-│  ├─ 1_접수.py           방문객 QR 접수 폼 (모바일)
-│  ├─ 2_관제.py           실시간 대시보드 ★
-│  └─ 3_조치.py           부서별 조치요청서
-├─ core/
-│  ├─ config.py           라벨·구역·부서·가중치
-│  ├─ db.py               SQLite(WAL) 접근 계층
-│  ├─ llm.py              에이전트 루프 (직접 구현) ★
-│  ├─ severity.py         심각도 계산 (결정적 함수) ★
-│  ├─ privacy.py          개인정보 마스킹·인젝션 탐지
-│  └─ tourapi.py          한국관광공사 TourAPI 연동 (외부 API)
-│  └─ replay.py           리플레이 엔진 (배속 재생)
-├─ agents/
-│  ├─ classifier.py       ①분류      도구 3개
-│  ├─ monitor.py          ②심각도·감시 도구 4개
-│  ├─ dispatcher.py       ③조치      도구 4개 (DOCX 생성)
-│  ├─ supervisor.py       ④통합      도구 3개 ★ 마지막에 합치는 자리
-│  └─ common.py           공용 도구 (축제정보 조회)
-├─ scripts/
-│  ├─ seed_festival.py    D0 축제 시드 (관광공사 API)
-│  ├─ make_dev_seed.py    개발용 샘플 민원 생성
-│  └─ stub_classify.py    개발용 스텁 분류 (제품 아님)
-├─ worker.py              에이전트 오케스트레이터
+├─ web/                   웹 앱 (Vite + TypeScript) — 방문객 접수(?v=qr) · 관제 ★ · 조치
+├─ supabase/schema.sql    Supabase 스키마·RPC·RLS·Storage (2026-09-30 적용)
+├─ server/                서버 전체 — TypeScript (Node 24, 타입 제거 실행·빌드 없음)
+│  ├─ package.json        의존성 (@anthropic-ai/sdk · docx · pg · dotenv)
+│  ├─ worker.ts           에이전트 오케스트레이터
+│  ├─ webapi.ts           개발·테스트용 local 대역 API (SQLite, Supabase 흉내)
+│  ├─ cli.ts              터미널 명령 (status · cycle · db · todo …)
+│  ├─ core/
+│  │  ├─ config.ts        라벨·구역·부서·가중치
+│  │  ├─ db.ts            SQLite(WAL) / Supabase Postgres 접근 계층
+│  │  ├─ llm.ts           에이전트 루프 (직접 구현) ★
+│  │  ├─ severity.ts      심각도 계산 (결정적 함수) ★
+│  │  ├─ issues.ts        관제 카드 생성·문구 검사
+│  │  ├─ privacy.ts       개인정보 마스킹·인젝션 탐지
+│  │  ├─ intake.ts · review.ts · admin.ts   접수 · 확인 필요 처리 · 운영자 코드
+│  │  ├─ rules.ts         local 대역 키워드 규칙 (개발용)
+│  │  ├─ tourapi.ts       한국관광공사 TourAPI 연동 (외부 API)
+│  │  └─ replay.ts        리플레이 엔진 (배속 재생)
+│  ├─ agents/
+│  │  ├─ classifier.ts    ①분류      도구 3개
+│  │  ├─ monitor.ts       ②심각도·감시 도구 4개
+│  │  ├─ dispatcher.ts    ③조치      도구 4개 (DOCX 생성)
+│  │  ├─ supervisor.ts    ④통합      도구 3개 ★ 마지막에 합치는 자리
+│  │  └─ common.ts        공용 도구 (축제정보 조회)
+│  ├─ scripts/            seed_festival · make_dev_seed · run_all_servers · final_check · testcase_report · measure_* …
+│  └─ tests/              단위 테스트 (*.test.ts, `npm --prefix server test`) · attack_check.ts · latency_check.ts
 ├─ output/                생성된 조치요청서 DOCX
 └─ tests/
-   ├─ test_severity.py    단위 9건
-   ├─ test_scenarios.py   대표 Test Case 5종 (제출 필수)
-   └─ testcase_report.md  ← 테스트 증거 (자동 생성)
+   └─ testcase_report.md  ← 대표 Test Case 5종 결과 (server/scripts/testcase_report.ts 가 자동 생성)
 ```
 
 ### 심사 배점 대응
 
 | 영역 | 배점 | 이 저장소에서 |
 |---|---|---|
-| AI Agent 구현성 | 20 | `core/llm.py` 에이전트 루프 · `agent_log` 실행 기록 |
+| AI Agent 구현성 | 20 | `server/core/llm.ts` 에이전트 루프 · `agent_log` 실행 기록 |
 | 기술 구현·완성도 | 20 | E2E 8 / 연동 6 / **안정성·Test Case 6 → `tests/`** |
-| 데이터·안전·윤리 | 10 | `core/privacy.py` 마스킹 · 인젝션 가드 · 결정적 판정 |
+| 데이터·안전·윤리 | 10 | `server/core/privacy.ts` 마스킹 · 인젝션 가드 · 결정적 판정 |
 | 비즈니스 모델 | 10 | `../제출_준비/비즈니스모델.md` |
 | (가점) 실사용자 3명 | +1 | `../제출_준비/실사용자_검증_확인서.md` |
 
@@ -397,11 +404,11 @@ Agent Path (배후, 주기 실행)
 
 ### 판단은 에이전트, 계산은 함수
 
-`core/severity.py`에는 LLM이 없습니다. 에이전트는 이 함수를 **도구로 호출**만 합니다.
+`server/core/severity.ts`에는 LLM이 없습니다. 에이전트는 이 함수를 **도구로 호출**만 합니다.
 
 - 같은 입력 → 항상 같은 점수 (**시연 중 사고가 안 남**)
 - `formula` 문자열을 함께 반환 → 화면에 계산식이 그대로 노출됨
-- 단위 테스트로 검증 가능 (`tests/test_severity.py`)
+- 단위 테스트로 검증 가능 (`server/tests/*.test.ts`)
 
 > 발표 한 문장: **"각 에이전트는 스스로 계산하지 않고, 검증 가능한 도구를 호출합니다."**
 
@@ -419,7 +426,7 @@ Agent Path (배후, 주기 실행)
 ### 경계 규칙 (B-01 ~ B-04) · 확인 필요
 
 한가한 창에서 1건이 100점·즉시·급증이 되던 문제를 막습니다 (할일 D5-25).
-값은 `core/config.py` 에 있습니다.
+값은 `server/core/config.ts` 에 있습니다.
 
 | ID | 규칙 | config |
 |---|---|---|
@@ -436,7 +443,7 @@ Agent Path (배후, 주기 실행)
 ### 관제 '지금 조치할 일' 카드 (D5-29) · 민원 지우기 (D5-30)
 
 관제는 유형 순위 대신 **카드**(유형×구역)로 "무엇을, 어디서, 무엇부터, 어떻게"를 보여 줍니다.
-`core/issues.py` 가 만들고 `issue` 테이블 한 행이 카드 한 장입니다 (`/api/control` 의 `issues[]`).
+`server/core/issues.ts` 가 만들고 `issue` 테이블 한 행이 카드 한 장입니다 (`/api/control` 의 `issues[]`).
 
 | 구분 | 누가 | 내용 |
 |---|---|---|
@@ -463,10 +470,10 @@ Agent Path (배후, 주기 실행)
 모델 제안은 `classification.suggested_label` 열에 저장되고, 운영자가 처리한 건은 `decided_by='operator'` 로 표시되어 `measure_accuracy` 가 정확도에서 뺍니다.
 `/api/control` 의 `review_items[]` 는 안전 의심 먼저·오래된 것 먼저 최대 20건이고, 안전 의심이 15분 넘게 방치되면 알림(`review_safety_stale`)이 한 번 올라갑니다.
 `/api/control` 의 feed 항목에는 웹 접수에 한해 `receipt_no`(접수 완료 창의 `W-번호`)가 붙어 민원 번호와 맞춰 볼 수 있고,
-`python cli.py db show <번호>` 가 접수부터 분류까지 시각을 보여 줍니다 (`W-38` = 접수번호, `#202`·`202` = 민원 번호).
+`node server/cli.ts db show <번호>` 가 접수부터 분류까지 시각을 보여 줍니다 (`W-38` = 접수번호, `#202`·`202` = 민원 번호).
 
 **접수 검증**: 한글·영문·숫자가 2개 이상이어야 접수됩니다 (`'...'` `'ㅋㅋ'` `'!!!!'` 거부).
-`webapi.py` · `supabase/schema.sql` RPC · `db.insert_feedback` 이 같은 규칙입니다
+`webapi.ts` · `supabase/schema.sql` RPC · `db.insert_feedback` 이 같은 규칙입니다
 (`core/privacy.has_content`).
 
 ---
@@ -507,7 +514,7 @@ Agent Path (배후, 주기 실행)
 
 ## 비용 주의
 
-`core/config.py`의 `MODEL`은 `claude-opus-5-5`입니다 (100만 토큰당 입력 $4 · 출력 $20).
+`server/core/config.ts`의 `MODEL`은 `claude-opus-5-5`입니다 (100만 토큰당 입력 $4 · 출력 $20).
 리플레이를 배속으로 돌리면 호출이 폭증하므로 **분류 캐시가 필수**입니다
 (`classify_cache` 테이블, 이미 구현). 같은 문장은 두 번 호출하지 않습니다.
 
@@ -515,10 +522,10 @@ D0에 시드 200건을 미리 한 번 분류해 캐시에 적재해 두면, 시�
 거의 부르지 않고 재생됩니다. **시연 도중 API 지연으로 영상이 망가지는 것을 막는 장치**입니다.
 
 API 호출마다 `agent_log` 에 `api_call` 행(토큰 수·응답 모델)이 남습니다.
-`python scripts/measure_cost.py` 로 민원 1건 처리 원가를 계산합니다.
+`node server/scripts/measure_cost.ts` 로 민원 1건 처리 원가를 계산합니다.
 
 비용을 더 줄이려면 분류 에이전트부터 `claude-sonnet-5-5` 등으로 낮춰 보되,
-`scripts/measure_accuracy.py --backend anthropic` 로 정확도를 먼저 비교하세요.
+`server/scripts/measure_accuracy.ts --backend anthropic` 로 정확도를 먼저 비교하세요.
 모델을 바꾸면 `config.PRICE_PER_MTOK` 에 단가도 넣어야 원가가 계산됩니다.
 
 ---

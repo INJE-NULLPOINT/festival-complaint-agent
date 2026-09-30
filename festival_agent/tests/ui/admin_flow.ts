@@ -1,0 +1,550 @@
+// 관리자 화면(관제·조치) 기능 점검 — 헤드리스 크롬(CDP) + 실시간 연결(SSE) 직접 구독.
+//   node tests/ui/admin_flow.ts <base>      예: http://127.0.0.1:5174  (복사본 DB 를 붙인 서버에서만!)
+// 출력: ✓ 통과 · ✗ 실패 · ○ 건너뜀(아직 없는 기능). 실패가 있으면 종료 코드 1.
+//
+// 관제 화면은 두 모양이다 — 서버가 issues[] 를 주면 '조치할 일 카드'(D5-29), 안 주면 옛 '심각도 1위 카드'.
+// 지금 어느 쪽인지 화면에서 알아내 그쪽을 점검한다.
+//
+// 운영자 코드(D5-31): 서버가 관리자 동작에 코드를 요구하므로, 테스트용 코드를 환경변수 UI_ADMIN_CODE 로 받는다
+// (run_all 이 무작위 값을 만들어 테스트 webapi 의 ADMIN_CODE 와 여기에 같이 넣는다).
+//
+// 운영 DB 에 돌리지 말 것: 조치 상태를 바꿨다 되돌리고, 요청서 생성을 요청하고, 민원을 지웠다 되살린다.
+// (요청서 '생성' 자체는 워커가 하므로 여기서는 요청이 접수돼 대기 중으로 보이는 데까지만 본다.)
+import { openChrome, quitChrome } from "./lib.ts";
+import { createRequire } from "node:module";
+
+const base = (process.argv[2] ?? "").replace(/\/$/, "");
+const CODE = process.env.UI_ADMIN_CODE ?? "";
+if (!base) { console.error("사용: node tests/ui/admin_flow.ts <base>"); process.exit(2); }
+
+// ── 출력 ──────────────────────────────────────────────────────────
+let failed = 0, passed = 0, skipped = 0;
+const ok = (name, detail = "") => { passed++; console.log(`✓ ${name}${detail ? "  — " + detail : ""}`); };
+const bad = (name, detail = "") => { failed++; console.log(`✗ ${name}${detail ? "  — " + detail : ""}`); };
+const check = (name, cond, detail = "") => (cond ? ok(name, detail) : bad(name, detail));
+const skip = (name, why) => { skipped++; console.log(`○ ${name}  — 건너뜀: ${why}`); };
+// 기계가 바쁘면(다른 프로그램이 CPU 를 쓰면) 화면이 늦게 반응한다. run_all 이 CPU 사용률을 재서 UI_SLOW(1~3)를 넘기면
+// 기다리는 시간만 그 배율로 늘린다 — 검사 기준은 그대로다.
+const SLOW = Math.max(1, Number(process.env.UI_SLOW) || 1);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms * SLOW));
+const until = async (fn, ms = 6000, step = 150) => {
+  const t0 = Date.now();
+  for (;;) { const v = await fn(); if (v) return v; if (Date.now() - t0 > ms * SLOW) return null; await new Promise((r) => setTimeout(r, step)); }
+};
+
+// ── API (vite 프록시 경유 = 화면과 같은 길) ─────────────────────────
+const get = async (p) => (await (await fetch(base + p)).json()).data;
+const headerSafe = (s) => /^[\x20-\x7e]+$/.test(s);      // HTTP 헤더에는 영문·숫자·기호만 실린다 — 한글 등이 섞인 코드는 본문 p_code 로 (화면과 같은 규칙)
+const rpc = async (name, body, code = CODE) => {       // code=null → 일부러 코드 없이 보낸다
+  const viaHeader = !!code && headerSafe(code);
+  const payload = code && !viaHeader ? { ...body, p_code: code } : body;
+  const r = await fetch(`${base}/api/rpc/${name}`, { method: "POST", headers: { "Content-Type": "application/json", ...(viaHeader ? { "X-Admin-Code": code } : {}) }, body: JSON.stringify(payload) });
+  const j = await r.json().catch(() => ({}));
+  return { status: r.status, data: j.data, error: j.error };
+};
+
+// ── SSE 를 Node 에서 직접 구독 (브라우저와 별개로 서버가 변화를 알리는지) ──
+const sse = { events: [], ac: new AbortController() };
+(async () => {
+  try {
+    const res = await fetch(base + "/api/events", { signal: sse.ac.signal });
+    const dec = new TextDecoder(); let buf = "";
+    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+      buf += dec.decode(chunk, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, i); buf = buf.slice(i + 2);
+        const m = block.match(/^event: (\w+)/m);
+        if (m) sse.events.push({ t: Date.now(), name: m[1] });
+      }
+    }
+  } catch { /* 종료 */ }
+})();
+const sseSince = (t, name) => sse.events.some((e) => e.t >= t && e.name === name);
+
+// ── 크롬 ──────────────────────────────────────────────────────────
+const { chrome, ws, send, ev } = await openChrome({ prefix: "adm-", width: 1280, height: 900 });
+const go = async (hash) => {
+  await send("Page.navigate", { url: `${base}/#${hash}` });
+  await send("Page.reload");          // 같은 주소의 해시 이동은 다시 그리지 않을 수 있어 새로 연다
+  await until(() => ev(`document.getElementById("app")?.children.length > 0`), 8000);
+  await sleep(700);
+};
+const q = (sel) => `document.querySelector(${JSON.stringify(sel)})`;
+const qa = (sel) => `document.querySelectorAll(${JSON.stringify(sel)})`;
+const exists = (sel) => ev(`!!${q(sel)}`);
+const count = (sel) => ev(`${qa(sel)}.length`);
+const click = (sel) => ev(`(() => { const e = ${q(sel)}; if (!e) return false; e.click(); return true; })()`);
+const text = (sel) => ev(`${q(sel)}?.textContent?.trim().replace(/\\s+/g, " ") ?? ""`);
+const shown = (sel) => ev(`(() => { const e = ${q(sel)}; return !!e && e.getClientRects().length > 0 && !e.hidden; })()`);
+// 화면이 다시 그려졌는지 보려고 #app 의 첫 자식에 표식을 달아 둔다 (다시 그리면 사라진다)
+const markApp = () => ev(`(() => { const c = document.getElementById("app").firstElementChild; if (c) c.__mark = 1; return !!c; })()`);
+const redrawn = (ms = 6000) => until(() => ev(`!document.getElementById("app").firstElementChild?.__mark`), ms);
+// 이 민원 번호(data-fid)가 화면에 '보이는' 곳의 수 (지우는 중 leaving · 숨김 gone 은 안 센다)
+const visibleFid = (id) => ev(`[...document.querySelectorAll('[data-fid="${id}"]')].filter((e) => !e.classList.contains("gone") && !e.classList.contains("leaving") && e.getClientRects().length > 0).length`);
+
+const crash = async (e) => {
+  console.log(`✗ 점검 스크립트가 예외로 멈춤  — ${String(e?.message ?? e).slice(0, 160)}`);
+  try { sse.ac.abort(); await quitChrome(chrome, ws); } catch { /* */ }
+  process.exit(1);
+};
+process.on("uncaughtException", crash);
+process.on("unhandledRejection", crash);
+
+await send("Page.enable"); await send("Runtime.enable");
+
+// ══ 0. 서버 ═══════════════════════════════════════════════════════
+await until(() => sse.events.some((e) => e.name === "ready"), 6000);
+check("서버 실시간 연결(SSE) — ready", sse.events.some((e) => e.name === "ready"));
+const control0 = await get("/api/control");
+const action0 = await get("/api/action");
+check("API /api/control · /api/action 응답", control0 && action0 && Array.isArray(action0.actions), `요청서 ${action0?.actions?.length ?? "?"}건 · 유입 ${control0?.feed?.length ?? "?"}건`);
+
+// ══ 0.5 운영자 코드 보호 (D5-31) ═══════════════════════════════════
+// 서버 수준: 코드 없이·틀린 코드로는 관리자 동작이 실행되지 않고, 방문객 접수는 코드 없이 된다.
+const probeAdmin = await rpc("check_admin", {}, null);
+if (probeAdmin.status === 404) skip("운영자 코드 보호", "서버에 check_admin 이 없음 (D5-31 서버 미구현)");
+else if (probeAdmin.status === 403) bad("운영자 코드 보호: 테스트 서버에 코드가 설정돼 있어야 함", "403 — 서버의 ADMIN_CODE 가 비어 있음 (run_all 은 무작위 코드를 넣는다)");
+else if (!CODE) bad("운영자 코드 보호: 테스트용 코드(UI_ADMIN_CODE)가 없음", "run_all 로 돌리거나 환경변수로 넘길 것");
+else {
+  check("코드 보호(서버): 코드 없이 관리자 동작 → 401 거부", probeAdmin.status === 401, `status ${probeAdmin.status} · ${probeAdmin.error}`);
+  const victim = control0.feed?.[0]?.id;
+  const noCode = victim == null ? null : await rpc("delete_feedback", { p_id: victim }, null);
+  const wrongCode = victim == null ? null : await rpc("delete_feedback", { p_id: victim }, "wrong-code");
+  check("코드 보호(서버): 민원 지우기 — 코드 없음·틀림은 거부", victim == null || (noCode.status === 401 && wrongCode.status === 401), `${noCode?.status}/${wrongCode?.status}`);
+  check("코드 보호(서버): 거부된 지우기는 실행되지 않음", victim == null || (await get("/api/control")).feed.some((f) => f.id === victim));
+  const a0 = action0.actions.find((a) => a.status !== "superseded");
+  if (a0) {
+    const st = await rpc("set_action_status", { p_id: a0.id, p_status: "done" }, null);
+    check("코드 보호(서버): 조치 상태 변경 — 코드 없음은 거부·실행 안 됨", st.status === 401 && (await get("/api/action")).actions.find((a) => a.id === a0.id)?.status === a0.status, `status ${st.status}`);
+  }
+  const rd = await rpc("request_doc", { p_label: "safety" }, null);
+  check("코드 보호(서버): 조치요청서 생성 — 코드 없음은 거부", rd.status === 401, `status ${rd.status}`);
+  const visit = await rpc("submit_feedback", { p_zone_id: 1, p_text: "코드 없이 접수되는지 점검" }, null);
+  check("코드 보호(서버): 방문객 접수는 코드 없이 통과", visit.status === 200, `status ${visit.status}`);
+
+  // 화면 수준 — 깨끗한 탭(코드 없음)에서 처음 누르면 입력 창
+  await go("control");
+  await ev(`sessionStorage.clear(); localStorage.clear();`);
+  const delBtn = ".feed [data-del]";
+  if (!(await exists(delBtn))) skip("코드 보호(화면)", "화면에 [민원 지우기] 버튼이 없음");
+  else {
+    const id = await ev(`${q(delBtn)}.dataset.del`);
+    const total0 = (await get("/api/control")).total;
+    await click(delBtn);
+    const modal = await until(() => exists(".adm-overlay"), 3000);
+    check("코드 보호(화면): 처음 지우기를 누르면 코드 입력 창", !!modal && (await ev(`!!${q(".adm-modal")}.getAttribute("role") && document.activeElement?.id === "adm-code"`)), "입력칸에 포커스");
+    check("코드 보호(화면): 코드를 넣기 전에는 지워지지 않음 (서버에 안 보냄)", (await get("/api/control")).total === total0 && (await visibleFid(id)) > 0);
+    check("코드 보호(화면): 창 설명에 '확인 필요 처리' 포함 (D5-38 문구)", await ev(`${q("#adm-d")}.textContent.includes("확인 필요 처리")`));
+    check("코드 보호(화면): 입력 창은 가려진 입력(password)·16px 이상", await ev(`${q("#adm-code")}.type === "password" && parseFloat(getComputedStyle(${q("#adm-code")}).fontSize) >= 16`));
+
+    await click(".adm-cancel"); await until(async () => !(await exists(".adm-overlay")), 2000);
+    check("코드 보호(화면): 취소 → 창이 닫히고 민원은 그대로", !(await exists(".adm-overlay")) && !!(await until(async () => (await visibleFid(id)) > 0, 3000)));
+    check("코드 보호(화면): 취소하면 안내 토스트", !!(await until(() => ev(`/취소/.test(document.getElementById("toasts").textContent)`), 2000)));
+
+    await click(delBtn); await until(() => exists(".adm-overlay"), 3000);
+    await ev(`(() => { document.getElementById("adm-code").value = "wrong-code"; })()`); await click(".adm-ok");
+    check("코드 보호(화면): 틀린 코드 → 창이 남고 오류 표시", !!(await until(() => ev(`!document.querySelector(".adm-err").hidden && /맞지 않/.test(document.querySelector(".adm-err").textContent)`), 4000)) && (await exists(".adm-overlay")), await text(".adm-err"));
+    check("코드 보호(화면): 틀린 코드로는 지워지지 않음", (await get("/api/control")).total === total0);
+
+    await ev(`(() => { document.getElementById("adm-code").value = ${JSON.stringify(CODE)}; })()`); await click(".adm-ok");
+    check("코드 보호(화면): 맞는 코드 → 창이 닫히고 지우기 성공", !!(await until(async () => !(await exists(".adm-overlay")) && (await visibleFid(id)) === 0, 5000)));
+    check("코드 보호(화면): 서버에서도 지워짐 (총 건수 -1)", !!(await until(async () => (await get("/api/control")).total === total0 - 1, 4000)));
+    const where = JSON.parse(await ev(`JSON.stringify({ session: Object.keys(sessionStorage).some((k) => sessionStorage.getItem(k) === ${JSON.stringify(CODE)}),
+      local: Object.keys(localStorage).some((k) => localStorage.getItem(k) === ${JSON.stringify(CODE)} || /admin|code/i.test(k)),
+      dom: document.documentElement.outerHTML.includes(${JSON.stringify(CODE)}), url: location.href.includes(${JSON.stringify(CODE)}) })`));
+    check("코드 보관: sessionStorage 에만 (localStorage · 화면 · 주소에는 없음)", where.session && !where.local && !where.dom && !where.url, JSON.stringify(where));
+    await click("#toasts .toast-act");
+    check("코드 보호(화면): 같은 탭의 다음 관리자 동작(되돌리기)은 다시 묻지 않음", !!(await until(async () => (await visibleFid(id)) > 0, 5000)) && !(await exists(".adm-overlay")));
+    // [되돌리기]는 화면이 먼저 돌아오고 서버 반영이 조금 뒤다. 그 요청이 끝나기 전에 새로고침하면 요청이 끊겨 민원이 지워진 채 남고,
+    // 다음 지우기 버튼이 없어 점검이 (가끔) 실패했다 → 서버 반영을 조건으로 기다린 뒤 새로고침하고, 버튼이 나타날 때까지 기다려 누른다.
+    await until(async () => (await get("/api/control")).total === total0, 6000);
+    await go("control");
+    await until(() => exists(delBtn), 6000);
+    await click(delBtn);
+    check("코드 보관: 새로고침해도 같은 탭이면 기억 (다시 묻지 않음)", !(await until(() => exists(".adm-overlay"), 1200)) && !!(await until(async () => (await visibleFid(id)) === 0, 4000)));
+    await until(async () => (await get("/api/control")).total === total0 - 1, 5000);   // 화면은 즉시 숨기지만 서버 반영은 조금 늦다
+    await rpc("restore_feedback", { p_id: id });                      // 원래대로
+    await until(async () => (await get("/api/control")).total === total0, 5000);
+
+    // 저장된 코드가 더 이상 안 맞을 때(코드가 바뀜) — 다시 묻는다
+    await go("control");
+    await ev(`sessionStorage.setItem("festival_admin_code", "old-code")`);
+    const id2 = await ev(`${q(delBtn)}.dataset.del`);
+    await click(delBtn);
+    check("코드 보호(화면): 저장된 코드가 틀리면 다시 묻고 이유를 알림", !!(await until(() => ev(`!!document.querySelector(".adm-overlay") && /더 이상 맞지 않/.test(document.querySelector(".adm-err")?.textContent ?? "")`), 4000)), await text(".adm-err"));
+    await ev(`(() => { document.getElementById("adm-code").value = ${JSON.stringify(CODE)}; })()`); await click(".adm-ok");
+    check("코드 보호(화면): 다시 맞는 코드를 넣으면 이어서 실행", !!(await until(async () => (await visibleFid(id2)) === 0, 5000)));
+    await until(async () => (await get("/api/control")).total === total0 - 1, 5000);
+    await rpc("restore_feedback", { p_id: id2 });
+    await until(async () => (await get("/api/control")).total === total0, 5000);
+  }
+
+  // 방문객 화면에는 관리자 요소를 아예 그리지 않는다
+  await send("Page.navigate", { url: `${base}/?v=qr` }); await send("Page.reload");
+  await until(() => ev(`document.getElementById("app")?.children.length > 0`), 8000); await sleep(700);
+  check("방문객 화면: 입력 창·관리자 버튼 없음", await ev(`!document.querySelector(".adm-overlay, .adm-modal, input[type=password], [data-del], [data-gen], [data-status], #adm-code")`));
+  await send("Page.navigate", { url: `${base}/?v=qr#control` }); await send("Page.reload");
+  await until(() => ev(`document.getElementById("app")?.children.length > 0`), 8000); await sleep(700);
+  check("방문객 화면: 주소에 #control 을 붙여도 관제가 아니라 접수 화면", await ev(`!document.querySelector(".icard, .brief, .targets, [data-del]") && !!document.querySelector("#rf, form")`));
+}
+
+// ══ A. 관제 ═══════════════════════════════════════════════════════
+await go("control");
+const cardMode = await exists(".icards .icard");
+console.log(`· 관제 화면 모양: ${cardMode ? "조치할 일 카드 (D5-29)" : "옛 심각도 1위 카드"}`);
+{ // 점수는 화면에 보이지 않는다 (내부 계산·정렬에만 쓴다): 'NN점' · 점수 숫자 · 계산식 링크·패널 · 속성(aria-label·title)에도 없음. 브리핑 문장은 서버가 고칠 몫이라 제외.
+  const leak = await ev(`(() => { const app = document.getElementById("app").cloneNode(true); app.querySelectorAll(".brief-text, .brief-why").forEach((e) => e.remove());
+    const t = app.textContent; const attrs = [...app.querySelectorAll("[aria-label],[title]")].map((e) => (e.getAttribute("aria-label") || "") + (e.getAttribute("title") || "")).join(" ");
+    return JSON.stringify({ pt: /\d+(\.\d+)?\s*점/.test(t + " " + attrs), fx: /계산식/.test(t + " " + attrs), el: !!app.querySelector(".score, .hero-score, .formula-box, [data-fx], #hero-formula, .rank .bar") }); })()`);
+  const lk = JSON.parse(leak);
+  check("관제: 화면 어디에도 점수·'NN점'·계산식이 없음 (속성 포함)", !lk.pt && !lk.fx && !lk.el, leak);
+}
+check("관제: 화면이 그려지고 '실시간' 연결 표시", (await text("#live")).startsWith("실시간"), await text("#live"));
+{ // 헤더 배지 (D5-33): 데이터 · AI 해석 방식 · 합성 표시. 값은 서버(/api/control)가 준 것과 맞아야 한다.
+  const ctl = await get("/api/control");
+  const AI = { claude_code: "AI: Claude Code (개발용)", anthropic: "AI: Claude API", local: "AI: 규칙(개발용)" };
+  check("헤더: 데이터 배지에 '로컬 DB'", /로컬 DB/.test(await text("#live")), await text("#live"));
+  const ai = await until(async () => (await text("#chip-ai")) || null, 4000);
+  check("헤더: AI 배지가 서버 backend_llm 과 일치", ai === (AI[ctl.backend_llm] ?? `AI: ${ctl.backend_llm}`), `${ai} ← ${ctl.backend_llm}`);
+  const synVisible = await ev(`!document.getElementById("chip-syn").hidden`);
+  check("헤더: 합성 배지는 서버 synthetic.on 일 때만", synVisible === !!ctl.synthetic?.on, `화면 ${synVisible} · 서버 ${JSON.stringify(ctl.synthetic)}`);
+  // 접수 몰림 배지 (D5-33 ③): 서버 값에 맞춰 나오고, 값이 없으면 숨는다. 몰림을 일부러 만들면 접수 제한에 걸려 다른 점검이 깨지므로 응답만 바꿔치기한다.
+  const crowdNow = await ev(`!document.getElementById("chip-crowd").hidden`);
+  check("헤더: 접수 몰림 배지는 서버 crowding 이 있을 때만", crowdNow === ((ctl.crowding ?? []).length > 0), `화면 ${crowdNow} · 서버 ${JSON.stringify(ctl.crowding)}`);
+  await ev(`(() => { window.__f0 = window.fetch; window.fetch = async (u, o) => { const r = await window.__f0(u, o); if (!String(u).includes("/api/control")) return r; const j = await r.json(); j.data.crowding = [{ zone_id: 4, zone: "유등터널", count: 12, window_sec: 300 }, { zone_id: 5, zone: "소망등", count: 9, window_sec: 300 }]; return new Response(JSON.stringify(j), { status: 200, headers: { "Content-Type": "application/json" } }); }; window.dispatchEvent(new Event("hashchange")); })()`);
+  const crowdTxt = await until(async () => { const t = await text("#chip-crowd"); return (await ev(`!document.getElementById("chip-crowd").hidden`)) ? t : null; }, 5000);
+  check("헤더: 접수 몰림 배지 — 구역 · 건수/분 · 외 N곳", crowdTxt === "접수 몰림 · 유등터널 12건/5분 외 1곳", crowdTxt ?? "안 보임");
+  await ev(`window.fetch = window.__f0; window.dispatchEvent(new Event("hashchange"))`);
+  check("헤더: 몰림이 풀리면 배지가 사라짐", !!(await until(async () => (await ev(`document.getElementById("chip-crowd").hidden`)) === !((ctl.crowding ?? []).length > 0) ? true : null, 5000)));
+  if (ctl.synthetic?.on) check("헤더: 합성 배지에 건수", (await text("#chip-syn")).includes(`${ctl.synthetic.count}건`), await text("#chip-syn"));
+}
+check("관제: 브리핑 카드 (지금 조치할 일)", (await text(".brief .brief-text")).length > 5 || (await exists(".brief .muted")), (await text(".brief .brief-text")).slice(0, 30));
+const order = await ev(`(() => { const p = (s) => document.querySelector(s); const a = p(".brief"), h = p(".icards") || p(".hero"), g = p(".grid2");
+  const before = (x, y) => !!x && !!y && !!(x.compareDocumentPosition(y) & Node.DOCUMENT_POSITION_FOLLOWING);
+  return before(a, h) && before(h, g); })()`);
+check("관제: 읽는 순서 브리핑 → 카드(1위) → 나머지", order);
+
+if (cardMode) {
+  // ── 조치할 일 카드 (D5-29) ──
+  const issues = control0.issues ?? [];
+  const nCards = await count(".icard[data-key]");
+  check("카드: 화면의 카드 수 = 서버 issues 수", nCards === issues.length, `화면 ${nCards} · 서버 ${issues.length}`);
+  const main0 = issues.find((i) => i.grp === "main");
+  if (main0) check("카드: 1위(큰) 카드가 서버가 정한 1위", (await ev(`${q(".icard.big")}?.dataset.key ?? null`)) === main0.issue_key, `${main0.issue_key}`);
+  else skip("카드: 1위 카드", "서버가 '지금 조치할 일(main)' 카드를 주지 않음");
+  check("카드: 카드마다 제목·위치·우선순위·해야 할 일", await ev(`[...${qa(".icard[data-key]")}].every((c) => c.querySelector(".ic-title")?.textContent.trim() && c.querySelector(".ic-zone")?.textContent.trim() && c.querySelector(".badge") && c.querySelectorAll(".ic-acts li").length >= 1)`));
+  check("카드: 카드가 화면 폭을 넘치지 않음", await ev(`[...${qa(".icard[data-key]")}].every((c) => c.getBoundingClientRect().right <= window.innerWidth + 1)`));
+  if (!(await exists(".icard.big"))) skip("카드: 1위 카드 펼침·계산식", "1위(main) 카드가 화면에 없음 — 테스트 DB 에 지금 조치할 카드가 하나도 없는 경우");
+  if (await exists(".icard.big")) {
+    check("카드: 1위 카드는 항상 펼쳐짐 (해야 할 일·담당·민원)", (await shown(".icard.big .ic-body")) && (await text(".icard.big .ic-h")).includes("해야 할 일") && (await exists(".icard.big .ic-who")) && (await count(".icard.big .ic-q")) === 2);
+  }
+  if (await exists(".icard:not(.big) .ic-head")) {
+    await click(".icard:not(.big) .ic-head"); await sleep(300);
+    check("카드: 행을 누르면 펼침 (본문이 보임)", (await ev(`${q(".icard:not(.big)")}.classList.contains("open") && ${q(".icard:not(.big) .ic-head")}.getAttribute("aria-expanded") === "true"`)) && (await shown(".icard:not(.big) .ic-body")));
+    await click(".icard:not(.big) .ic-head"); await sleep(300);
+    check("카드: 행을 다시 누르면 접힘", !(await ev(`${q(".icard:not(.big)")}.classList.contains("open")`)) && !(await shown(".icard:not(.big) .ic-body")));
+  } else skip("카드: 행 펼침", "1위 말고 다른 카드가 없음");
+  if (await exists("details.igrp > summary")) {
+    await click("details.igrp > summary"); await sleep(250);
+    check("카드: 묶음(그 밖·조치 중·조치 완료) 펼침", await ev(`${q("details.igrp")}.open`), await text("details.igrp > summary"));
+    await click("details.igrp > summary"); await sleep(250);
+    check("카드: 묶음 접힘", !(await ev(`${q("details.igrp")}.open`)));
+  } else skip("카드: 묶음 펼침", "묶음(그 밖·조치 중·조치 완료)이 없음");
+  if (await exists("details.typerank > summary")) {
+    await click("details.typerank > summary"); await sleep(250);
+    check("카드: 유형별 순위 펼침 (카드 점수의 근거)", (await ev(`${q("details.typerank")}.open`)) && (await count(".typerank .rank li")) > 0, `${await count(".typerank .rank li")}개 유형`);
+    await click("details.typerank > summary"); await sleep(250);
+  }
+} else {
+  // ── 옛 모양 (서버가 카드를 주지 않을 때) ──
+  if (await exists(".hero")) {
+    check("관제: 심각도 1위 카드에 유형 이름·등급 배지 (점수는 안 보임)", (await text(".hero .hero-name")).length > 0 && (await exists(".hero .badge")) && !(await exists(".hero .hero-score")), await text(".hero .hero-name"));
+  } else skip("관제: 심각도 1위", "판정된 유형이 없음");
+  check("관제: 순위 행에 점수·계산식 없음", !(await exists(".rank li .score")) && !(await exists(".rank li .formula-box")));
+}
+
+if (await exists(".alert-row")) {
+  await click(".alert-row"); await sleep(250);
+  check("관제: 알림 행 펼침", await ev(`${q(".alerts li")}.classList.contains("open") && ${q(".alert-row")}.getAttribute("aria-expanded") === "true"`));
+  await click(".alert-row"); await sleep(250);
+  check("관제: 알림 행 접힘", !(await ev(`${q(".alerts li")}.classList.contains("open")`)));
+} else skip("관제: 알림 펼침", "미확인 알림이 없음");
+
+if (await exists(".feed-item")) {
+  await click(".feed-item"); await sleep(250);
+  check("관제: 유입 원문 펼침(전체 보임)", await ev(`${q(".feed li")}.classList.contains("open") && getComputedStyle(${q(".feed-text")}).whiteSpace === "normal"`));
+  await click(".feed-item"); await sleep(250);
+  check("관제: 유입 원문 접힘(한 줄)", !(await ev(`${q(".feed li")}.classList.contains("open")`)));
+} else skip("관제: 유입 원문 펼침", "유입이 없음");
+
+// ══ B. 실시간 갱신 + 펼침 유지 (조치 상태를 바꿔 서버가 변화를 알리게 한다) ═══
+const acts = action0.actions.filter((a) => a.status !== "superseded");
+const pick = acts.find((a) => a.status !== "done") ?? acts[0];
+const altStatus = (s) => (s === "in_progress" ? "requested" : "in_progress");
+if (pick) {
+  // 펼칠 수 있는 것들을 전부 펼쳐 두고
+  const opened = [];
+  if (cardMode) {
+    if (await exists(".icard:not(.big) .ic-head")) { await click(".icard:not(.big) .ic-head"); opened.push("card"); }
+    if (await exists("details.igrp > summary")) { await click("details.igrp > summary"); opened.push("grp"); }
+  } else {
+    if (await exists(".rank li .row")) { await click(".rank li .row"); opened.push("rank"); }
+  }
+  if (await exists(".alert-row")) { await click(".alert-row"); opened.push("alert"); }
+  if (await exists(".feed-item")) { await click(".feed-item"); opened.push("feed"); }
+  await sleep(300); await markApp();
+  const origin0 = await ev(`performance.timeOrigin`);      // 페이지가 통째로 다시 열렸는지 가르는 표식 (개발 서버가 파일 변경으로 새로고침하면 펼침 상태는 당연히 사라진다)
+  const t0 = Date.now();
+  const r = await rpc("set_action_status", { p_id: pick.id, p_status: altStatus(pick.status) });
+  check("상태 변경 RPC 200", r.status === 200, `#${pick.id} ${pick.status} → ${altStatus(pick.status)}`);
+  check("서버가 변화를 알림(SSE change)", !!(await until(() => sseSince(t0, "change"), 5000)));
+  check("화면이 스스로 다시 그려짐 (실시간)", !!(await redrawn(6000)));
+  await sleep(400);
+  const kept = JSON.parse(await ev(`JSON.stringify({
+    card: ${q(".icard:not(.big)")}?.classList.contains("open") ?? null,
+    grp: ${q("details.igrp")}?.open ?? null,
+    rank: ${q(".rank li")}?.classList.contains("open") ?? null,
+    alert: ${q(".alerts li")}?.classList.contains("open") ?? null,
+    feed: ${q(".feed li")}?.classList.contains("open") ?? null })`));
+  const lost = opened.filter((k) => kept[k] === false);
+  const reloaded = (await ev(`performance.timeOrigin`)) !== origin0;
+  check(`다시 그려도 펼침 유지 (${opened.join("·") || "펼칠 것 없음"})`, opened.length > 0 && lost.length === 0, lost.length ? `풀린 것: ${lost.join(", ")}${reloaded ? " — 페이지가 통째로 다시 열림(새로고침)" : " — 새로고침 없이 풀림"} · ${JSON.stringify(kept)}` : JSON.stringify(kept));
+  await rpc("set_action_status", { p_id: pick.id, p_status: pick.status });      // 되돌림
+} else skip("실시간 갱신·펼침 유지", "조치요청서가 하나도 없음");
+
+// ══ C. 조치 ═══════════════════════════════════════════════════════
+await go("action");
+const nTargets = await count(".targets li");
+check("조치: 조치 대상 목록", nTargets > 0, `${nTargets}개`);
+check("조치: 대상마다 [생성] 버튼", nTargets === await count(".targets li [data-gen]"));
+
+const gen = await ev(`(() => { const b = [...document.querySelectorAll("[data-gen]")].find((x) => !x.disabled); return b ? b.dataset.gen : null; })()`);
+if (gen) {
+  const before = (await get("/api/action")).jobs.map((j) => j.id);
+  await click(`[data-gen="${gen}"]`);
+  const toastOk = await until(() => ev(`[...document.querySelectorAll("#toasts .toast")].some((t) => t.textContent.includes("작성을 요청했습니다"))`), 4000);
+  check("요청서 생성 요청 → 안내 토스트", !!toastOk);
+  const job = await until(async () => (await get("/api/action")).jobs.find((j) => j.label === gen && !before.includes(j.id)) ?? (await get("/api/action")).jobs.find((j) => j.label === gen && ["queued", "running"].includes(j.status)), 4000);
+  check("요청서 생성 요청 → 서버에 작업이 쌓임", !!job, job ? `#${job.id} ${job.status} (워커는 이 테스트에 없음)` : "");
+  const waitingUi = await until(() => ev(`[...document.querySelectorAll(".targets li")].some((li) => li.querySelector("[data-gen='${gen}']")?.disabled && /대기 중|작성 중/.test(li.textContent))`), 5000);
+  check("요청서 생성 요청 → 화면에 '대기 중' · 버튼 잠김", !!waitingUi);
+} else skip("요청서 생성 요청", "누를 수 있는 [생성] 버튼이 없음 (모두 작성 중)");
+
+await go("action");
+if (await exists(".docs:not(.old) li [data-toggle]")) {
+  const id = await ev(`${q(".docs:not(.old) li [data-toggle]")}.closest("li").dataset.id`);
+  await click(`.docs:not(.old) li[data-id="${id}"] [data-toggle]`); await sleep(300);
+  check("조치: 미리보기 펼침(조치요청서 본문)", await ev(`getComputedStyle(${q(`.docs li[data-id="${id}"] .paper`)}).display !== "none" && ${q(`.docs li[data-id="${id}"] .paper h3`)}.textContent.includes("조치요청서")`), `#${id}`);
+  const paper = await text(`.docs li[data-id="${id}"] .paper`);
+  check("조치: 미리보기에 요청 사유·조치 제안", /요청 사유/.test(paper) && /조치 제안/.test(paper));
+  await click(`.docs:not(.old) li[data-id="${id}"] [data-toggle]`); await sleep(300);
+  check("조치: 미리보기 접힘", !(await ev(`${q(`.docs li[data-id="${id}"]`)}.classList.contains("open")`)));
+} else skip("조치: 미리보기", "미리보기가 있는 요청서가 없음");
+
+const hrefs = await ev(`[...document.querySelectorAll(".docs a.btn[href]")].slice(0, 3).map((a) => a.getAttribute("href"))`);
+if (hrefs?.length) {
+  const res = [];
+  for (const h of hrefs) { const r = await fetch(base + h); const b = new Uint8Array(await r.arrayBuffer()); res.push({ h, s: r.status, pk: b[0] === 0x50 && b[1] === 0x4b, n: b.length, ct: r.headers.get("content-type") ?? "" }); }
+  const badOnes = res.filter((x) => !(x.s === 200 && x.pk && /wordprocessingml/.test(x.ct)));
+  check("조치: DOCX 링크가 실제 파일(200 · PK 압축 · docx 형식)", badOnes.length === 0,
+    badOnes.length ? `깨진 링크: ${badOnes.map((x) => `${decodeURIComponent(x.h).slice(-40)} → ${x.s}`).join(", ")}` : res.map((x) => `${x.s}/${x.n}B`).join(" "));
+} else skip("조치: DOCX 내려받기", "DOCX 링크가 있는 요청서가 없음");
+
+// 상태 변경 — 화면의 세그먼트 버튼을 눌러서
+const live = (await get("/api/action")).actions.find((a) => a.status !== "superseded" && a.status !== "done") ?? (await get("/api/action")).actions.find((a) => a.status !== "superseded");
+if (live) {
+  const to = altStatus(live.status);
+  const t0 = Date.now();
+  await click(`.docs:not(.old) li[data-id="${live.id}"] [data-status="${to}"]`);
+  const changedApi = await until(async () => (await get("/api/action")).actions.find((a) => a.id === live.id)?.status === to, 4000);
+  check("조치: 상태 버튼 → 서버 반영", !!changedApi, `#${live.id} ${live.status} → ${to}`);
+  check("조치: 상태 변경 → 서버가 변화를 알림(SSE)", !!(await until(() => sseSince(t0, "change"), 5000)));
+  const uiOn = await until(() => ev(`${q(`.docs li[data-id="${live.id}"] [data-status="${to}"]`)}?.classList.contains("on")`), 6000);
+  check("조치: 화면의 선택 칸·상태 표시가 바뀜", !!uiOn && (await text(`.docs li[data-id="${live.id}"] .st`)).length > 0, await text(`.docs li[data-id="${live.id}"] .st`));
+  await click(`.docs:not(.old) li[data-id="${live.id}"] [data-status="${live.status}"]`);
+  const back = await until(async () => (await get("/api/action")).actions.find((a) => a.id === live.id)?.status === live.status, 4000);
+  check("조치: 원래 상태로 되돌리기", !!back, `→ ${live.status}`);
+} else skip("조치: 상태 변경", "바꿀 수 있는 요청서가 없음");
+
+if (await exists("#toggle-old")) {
+  await click("#toggle-old"); await until(() => exists(".docs.old li"), 4000);
+  check("조치: 대체된 요청서 펼침 (상태 버튼 없음)", (await exists(".docs.old li")) && !(await exists(".docs.old li [data-status]")));
+  await click("#toggle-old"); await until(async () => !(await exists(".docs.old")), 4000);
+  check("조치: 대체된 요청서 접힘", !(await exists(".docs.old")));
+} else skip("조치: 대체된 요청서", "대체된 요청서가 없음");
+
+// ══ D. 민원 지우기·되돌리기 (D5-30) ═══════════════════════════════
+// 서버(API) 수준 — 화면 버튼 유무와 상관없이
+await go("control");
+const fid = (await get("/api/control")).feed?.[0]?.id;
+const probe = fid == null ? null : await rpc("delete_feedback", { p_id: fid });
+if (fid == null) skip("지우기·되돌리기 (서버)", "유입 민원이 없음");
+else if (probe.status === 404) skip("지우기·되돌리기 (서버)", "서버에 delete_feedback 이 없음");
+else {
+  const t0 = Date.now();
+  const c1 = await get("/api/control");
+  check("지우기(서버): 유입에서 빠지고 총 건수가 줄어듦", probe.status === 200 && !c1.feed.some((f) => f.id === fid) && c1.total === control0.total - 1, `#${fid} 총 ${control0.total} → ${c1.total}`);
+  check("지우기(서버): 변화를 SSE 로 알림", !!(await until(() => sseSince(t0, "change"), 5000)));
+  // 지운 민원 목록 (D5-42) — 토스트가 지나간 뒤에도 되돌릴 수 있게. 코드가 필요하다.
+  const gd = (headers) => fetch(`${base}/api/deleted`, { headers }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
+  check("지운 목록(서버): 코드 없이는 401", (await gd({})).status === 401);
+  check("지운 목록(서버): 틀린 코드는 401", (await gd({ "X-Admin-Code": "wrong-code" })).status === 401);
+  const dl = CODE && headerSafe(CODE) ? await gd({ "X-Admin-Code": CODE }) : null;
+  const dlr = await rpc("list_deleted", {});
+  const items = dlr.data?.items ?? [];
+  const mine = items.find((x) => x.id === fid);
+  if (dl) check("지운 목록(서버): GET /api/deleted 도 같은 내용", dl.status === 200 && Array.isArray(dl.body.data) && dl.body.data.some((x) => x.id === fid), `status ${dl.status}`);
+  check("지운 목록(서버): 방금 지운 민원이 맨 앞에 (id · 원문 · 구역 · 지운 시각)", dlr.status === 200 && items[0]?.id === fid && !!mine?.raw_text && !!mine?.zone && !!mine?.deleted_at, `${items.length}건 · 맨 앞 #${items[0]?.id}`);
+  check("지운 목록(서버): 최대 50건", items.length <= 50);
+  const r2 = await rpc("restore_feedback", { p_id: fid });
+  check("지운 목록(서버): 되돌리면 목록에서 빠짐", !((await rpc("list_deleted", {})).data?.items ?? []).some((x) => x.id === fid));
+  const c2 = await get("/api/control");
+  check("되돌리기(서버): 유입에 돌아오고 건수가 복구", r2.status === 200 && c2.feed.some((f) => f.id === fid) && c2.total === control0.total, `총 ${c2.total}`);
+  const again = await rpc("delete_feedback", { p_id: 99999999 });
+  check("지우기(서버): 없는 민원 번호는 오류로 거절", again.status === 400, again.error ?? `status ${again.status}`);
+}
+
+// 화면 수준 — 휴지통 버튼(aria-label '민원 지우기') → 바로 사라짐 → 토스트 '되돌리기' → 돌아옴
+async function deleteFlow(area, selector, timing = false) {
+  await go("control");
+  if (!(await exists(selector))) return skip(`지우기·되돌리기 (화면 · ${area})`, `화면에 ${area}의 [민원 지우기] 버튼이 없음`);
+  const id = await ev(`${q(selector)}.dataset.del`);            // 지울 '민원 번호' (카드 번호가 아니다)
+  const before = await visibleFid(id);
+  const total0 = (await get("/api/control")).total;
+  await click(selector);
+  check(`지우기(화면·${area}): 바로 사라짐 (그 민원이 보이는 곳 ${before}곳 → 0곳)`, !!(await until(async () => (await visibleFid(id)) === 0, 2500)) && before > 0, `#${id}`);
+  check(`지우기(화면·${area}): '되돌리기' 토스트`, !!(await until(() => ev(`!!document.querySelector("#toasts .toast-act")`), 3000)), await text("#toasts .toast.has-act"));
+  check(`지우기(화면·${area}): 서버에서도 빠짐 (총 건수 -1)`, !!(await until(async () => (await get("/api/control")).total === total0 - 1, 4000)), `총 ${total0} → ${(await get("/api/control")).total}`);
+  if (timing) {
+    // D5-38 (WCAG 2.2.1): 되돌리기 알림은 10초 이상 보이고, 마우스를 올리면 멈춘다. 옛 5초 동안만 보였다면 여기서 실패한다.
+    const t0 = Date.now();
+    await new Promise((r) => setTimeout(r, 6500 * SLOW));
+    check("되돌리기 알림이 옛 5초를 넘겨 계속 보임 (6.5초 뒤에도)", await exists("#toasts .toast-act"));
+    const box = await ev(`(() => { const r = document.querySelector("#toasts .toast-act").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: box.x, y: box.y });            // 실제 마우스를 버튼 위로
+    const wait = Math.max(0, 11800 * SLOW - (Date.now() - t0));                                       // 원래라면 10초에 사라졌을 시각을 지나도록
+    await new Promise((r) => setTimeout(r, wait));
+    check("마우스를 올려 두면 10초가 지나도 사라지지 않음", await exists("#toasts .toast-act"), `${Math.round((Date.now() - t0) / 100) / 10}초 경과`);
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });                       // 마우스를 치우면
+    check("마우스를 치우면 곧 사라짐 (남은 시간 뒤)", !!(await until(() => ev(`!document.querySelector("#toasts .toast-act")`), 6000)));
+    // 사라진 뒤에는 되돌릴 수 없다 → 서버에서 다시 살려 이후 흐름(총 건수 등)을 원래대로 둔다
+    await rpc("restore_feedback", { p_id: Number(id) });
+    await until(async () => (await get("/api/control")).total === total0, 4000);
+    return;
+  }
+  await click("#toasts .toast-act");
+  check(`되돌리기(화면·${area}): 다시 보임`, !!(await until(async () => (await visibleFid(id)) > 0, 6000)), `#${id} ${await visibleFid(id)}곳`);
+  check(`되돌리기(화면·${area}): 서버도 복구 (총 건수 원래대로)`, !!(await until(async () => (await get("/api/control")).total === total0, 4000)));
+  await until(() => ev(`!document.querySelector("#toasts .toast-act")`), 3000);
+}
+await deleteFlow("유입", ".feed [data-del]", true);        // 알림 유지 시간·마우스 정지까지 본다
+await deleteFlow("유입", ".feed [data-del]");
+await deleteFlow("카드의 최신 민원", ".icard .ic-q [data-del]");
+
+// ══ G. QR 만들기 (관리자 '접수 QR', 조회 전용 — 운영자 코드 없이 열림). QR 은 접수 주소(?v=qr) 하나 ═════════════════════
+{
+  const req = createRequire(import.meta.url);
+  const jsQR = req("../../web/node_modules/jsqr");
+  const QRCode = req("../../web/node_modules/qrcode");
+  const origin = new URL(base).origin;
+  await ev(`try { localStorage.removeItem("festival_qr_base"); } catch (e) {}`);
+  await go("report");
+  await until(() => exists(".qr-card .qr-img"), 6000);
+  check("QR: 사이드바 '접수 QR' 가 이 화면을 연다 (코드 입력 없이)", (await text(".side-nav a.on")) === "접수 QR" && (await exists("#qr-base")) && !(await exists(".adm-overlay")));
+  check("QR: 기본 주소 = 지금 접속한 origin", (await ev(`document.getElementById("qr-base").value`)) === origin, origin);
+  check("QR: 구역별 카드 없이 큰 QR 한 장", (await count(".qr-card")) === 1 && (await count(".qr-img")) === 1 && (await count("[data-zone]")) === 0);
+  const url0 = `${origin}/?v=qr`;
+  check("QR: 주소 글자 = 기본 주소/?v=qr (구역 파라미터 없음) · PNG 저장 · 인쇄 버튼", (await text(".qr-url")) === url0 && (await ev(`document.querySelector(".qr-save")?.getAttribute("href")?.startsWith("data:image/png;base64,")`)) && (await ev(`document.querySelector(".qr-save")?.getAttribute("download")`)) === "qr_report.png" && (await text("#qr-print")) === "인쇄", await text(".qr-url"));
+
+  // 디코드: 화면의 QR 그림을 읽어 주소가 같은지 (폰으로 찍는 것을 대신한다)
+  const decode = async () => {
+    const raw = JSON.parse(await ev(`(() => { const i = document.querySelector(".qr-card .qr-img"); const w = Math.round(i.naturalWidth / 3), h = Math.round(i.naturalHeight / 3);
+      const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d"); x.imageSmoothingEnabled = false; x.drawImage(i, 0, 0, w, h);
+      return JSON.stringify({ w, h, d: Array.from(x.getImageData(0, 0, w, h).data) }); })()`));
+    return jsQR(Uint8ClampedArray.from(raw.d), raw.w, raw.h)?.data ?? null;
+  };
+  check("QR: QR 을 디코드하면 주소와 같음", (await decode()) === url0, String(await decode()));
+
+  // 공개 주소로 바꾸기 → 주소와 QR 이 바뀌고, 입력은 localStorage 에 남아 새로고침해도 유지
+  const PUB = "https://festival.example.kr/";
+  await ev(`(() => { const i = document.getElementById("qr-base"); i.value = ${JSON.stringify(PUB)}; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+  check("QR: 기본 주소를 바꾸면 주소와 QR 이 다시 만들어짐", !!(await until(async () => (await text(".qr-url")) === "https://festival.example.kr/?v=qr", 4000)), await text(".qr-url"));
+  check("QR: 바꾼 주소를 디코드해도 새 주소", (await decode()) === "https://festival.example.kr/?v=qr");
+  await go("report"); await until(() => exists(".qr-card .qr-img"), 6000);
+  check("QR: 입력한 기본 주소는 새로고침해도 기억 (localStorage)", (await ev(`document.getElementById("qr-base").value`)) === PUB && (await text(".qr-url")) === "https://festival.example.kr/?v=qr");
+  await ev(`(() => { const i = document.getElementById("qr-base"); i.value = "localhost:5174"; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+  check("QR: localhost 주소는 폰에서 안 열린다는 경고", !!(await until(() => ev(`!document.getElementById("qr-warn").hidden`), 4000)));
+
+  // 이 QR 이 여는 주소: 방문객 접수 화면, 관리자 메뉴 없음
+  await ev(`try { localStorage.removeItem("festival_qr_base"); } catch (e) {}`);
+  await send("Page.navigate", { url: url0 });
+  await until(() => ev(`!!document.querySelector("#rf select")`), 8000);
+  await sleep(400);
+  check("QR: 주소를 열면 방문객 접수 화면 (관리자 메뉴·QR 만들기 없음)", (await exists("#rf")) && !(await exists("#side")) && !(await exists("#qr-base")));
+
+  // 인쇄 모양: 사이드바·헤더·입력 줄·저장 버튼은 숨고 QR 카드만 남는다
+  await go("report"); await until(() => exists(".qr-card .qr-img"), 6000);
+  await send("Emulation.setEmulatedMedia", { media: "print" });
+  const pr = JSON.parse(await ev(`JSON.stringify({ side: getComputedStyle(document.getElementById("side")).display, top: getComputedStyle(document.querySelector("header.top")).display, bar: getComputedStyle(document.querySelector(".qr-top")).display, save: getComputedStyle(document.querySelector(".qr-save")).display, pad: getComputedStyle(document.body).paddingLeft, card: getComputedStyle(document.querySelector(".qr-card")).display })`));
+  await send("Emulation.setEmulatedMedia", { media: "" });
+  check("QR: 인쇄할 때 사이드바·헤더·입력 줄·저장 버튼은 숨고 QR 만 남음", pr.side === "none" && pr.top === "none" && pr.bar === "none" && pr.save === "none" && pr.pad === "0px" && pr.card !== "none", JSON.stringify(pr));
+}
+
+// ══ F. 잠김 · 서버 미설정 (D5-31) — 테스트 서버를 실제로 잠그지 않는다 ═══════════════════
+// 틀린 코드를 5번 넘게 넣으면 그 서버의 관리자 동작이 10분간 전부 막힌다. 그 서버에서 나머지 점검이 이어지면 줄줄이 깨지므로,
+// ① 서버가 정말 잠기는지는 run_all 이 따로 띄운 '잠금 시험용 서버'(UI_LOCK_BASE)에서만 본다 — 본 서버는 잠기지 않는다.
+// ② 화면이 잠김·미설정을 어떻게 보여 주는지는 check_admin 응답을 브라우저에서 429·403 으로 바꿔치기해서 본다 (서버는 그대로).
+const LOCK_BASE = (process.env.UI_LOCK_BASE ?? "").replace(/\/$/, "");
+if (!LOCK_BASE) skip("잠김(서버)", "잠금 시험용 서버(UI_LOCK_BASE)가 없음 — run_all 이 따로 띄워 준다");
+else if (!CODE) bad("잠김(서버): 테스트용 코드(UI_ADMIN_CODE)가 없음");
+else {
+  const rpcLock = async (name, body, code) => {
+    const viaHeader = !!code && headerSafe(code);
+    const r = await fetch(`${LOCK_BASE}/api/rpc/${name}`, { method: "POST", headers: { "Content-Type": "application/json", ...(viaHeader ? { "X-Admin-Code": code } : {}) }, body: JSON.stringify(code && !viaHeader ? { ...body, p_code: code } : body) });
+    return { status: r.status, error: (await r.json().catch(() => ({}))).error };
+  };
+  const fails = [];
+  for (let i = 0; i < 6; i++) fails.push((await rpcLock("check_admin", {}, `wrong${i}`)).status);
+  check("잠김(서버): 틀린 코드를 5번 넘게 → 429", fails.slice(0, 5).every((x) => x === 401) && fails[5] === 429, fails.join(","));
+  check("잠김(서버): 잠긴 동안은 맞는 코드도 거부", (await rpcLock("check_admin", {}, CODE)).status === 429);
+  check("잠김(서버): 잠겨도 방문객 접수는 통과", (await rpcLock("submit_feedback", { p_zone_id: 1, p_text: "잠금 중에도 접수되는지 점검" }, null)).status === 200);
+  const main = await rpc("check_admin", {}, CODE);
+  check("잠김(서버): 잠금은 그 서버만 — 본 테스트 서버는 영향 없음", main.status === 200, `본 서버 status ${main.status}`);
+}
+
+// 화면: 서버를 잠그지 않고 check_admin 응답만 바꿔치기한다
+async function withFakeAdminReply(status, body, fn) {
+  await send("Fetch.enable", { patterns: [{ urlPattern: "*check_admin*" }] });
+  const onMsg = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.method === "Fetch.requestPaused") {
+      send("Fetch.fulfillRequest", { requestId: m.params.requestId, responseCode: status,
+        responseHeaders: [{ name: "Content-Type", value: "application/json; charset=utf-8" }],
+        body: Buffer.from(JSON.stringify(body)).toString("base64") });
+    }
+  };
+  ws.addEventListener("message", onMsg);
+  try { await fn(); } finally { ws.removeEventListener("message", onMsg); await send("Fetch.disable"); }
+}
+async function fakeReplyFlow(label, status, body, expectMsg, closeButtonText) {
+  await go("control");
+  await ev(`sessionStorage.clear()`);
+  if (!(await exists(".feed [data-del]"))) return skip(`${label}(화면)`, "화면에 [민원 지우기] 버튼이 없음");
+  const total0 = (await get("/api/control")).total;
+  await withFakeAdminReply(status, body, async () => {
+    await click(".feed [data-del]"); await until(() => exists(".adm-overlay"), 3000);
+    await ev(`(() => { document.getElementById("adm-code").value = ${JSON.stringify(CODE || "x")}; })()`); await click(".adm-ok");
+    check(`${label}(화면): 안내 문구 · 입력 막힘 · 버튼이 [${closeButtonText}]`, !!(await until(() => ev(`${expectMsg}.test(document.querySelector(".adm-err")?.textContent ?? "") && document.getElementById("adm-code").disabled && document.querySelector(".adm-ok").textContent.trim() === ${JSON.stringify(closeButtonText)}`), 4000)), await text(".adm-err"));
+    await click(".adm-ok");
+  });
+  check(`${label}(화면): 닫으면 창이 사라짐`, !!(await until(async () => !(await exists(".adm-overlay")), 3000)));
+  check(`${label}(화면): 지워지지 않고 코드도 저장되지 않음`, (await get("/api/control")).total === total0 && !(await ev(`Object.keys(sessionStorage).length > 0`)), `총 ${total0}`);
+}
+await fakeReplyFlow("잠김", 429, { error: "시도가 너무 많습니다. 10분 뒤에 다시 시도하세요" }, "/잠시 후/", "닫기");
+await fakeReplyFlow("서버 미설정", 403, { error: "운영자 코드가 필요합니다" }, "/설정되지 않았/", "닫기");
+
+console.log(`\n통과 ${passed} · 실패 ${failed} · 건너뜀 ${skipped}`);
+console.log(failed ? "실패 있음" : "전부 통과");
+sse.ac.abort(); await quitChrome(chrome, ws);
+process.exit(failed ? 1 : 0);

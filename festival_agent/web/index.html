@@ -6,9 +6,28 @@
     <title>축제 민원 관제</title>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+    <script>
+      // 방문객(?v=qr)에는 관리자 뼈대(사이드바·햄버거·제목 줄)를 처음부터 숨긴다 — JS 가 늦거나 멈춰도 방문객에게 관리자 메뉴가 비치지 않게. (ES5 문법만)
+      if (/[?&]v=qr(&|$)/.test(location.search)) document.documentElement.className += " v";
+    </script>
   </head>
   <body>
+    <aside class="side" id="side" aria-label="주 메뉴">
+      <div class="side-brand">
+        <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13l4-6 4 9 3-5 5 2"/></svg></span>
+        <strong id="side-name">축제 민원 관제</strong>
+      </div>
+      <nav class="side-nav" id="tabs" aria-label="화면 선택">
+        <p class="side-group">운영</p>
+        <a href="#control" data-route="control"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg><span>관제</span></a>
+        <a href="#action" data-route="action"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9z"/><path d="m9 14 2 2 4-4"/></svg><span>조치</span></a>
+        <p class="side-group">도구</p>
+        <a href="#report" data-route="report"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M20 20h.01M17 20v-3"/></svg><span>접수 QR</span></a>
+      </nav>
+    </aside>
+    <div class="side-scrim" id="side-scrim" hidden></div>
     <header class="top">
+      <button type="button" class="menu-btn" id="menu-btn" aria-label="메뉴 열기" aria-expanded="false" aria-controls="side"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
       <div class="brand">
         <span class="dot" aria-hidden="true"></span>
         <strong>축제 민원 관제</strong>
@@ -17,12 +36,11 @@
         <span class="chip warn" id="chip-syn" hidden></span>
         <span class="chip warn" id="chip-crowd" hidden></span>
       </div>
-      <nav class="tabs" id="tabs">
-        <a href="#control" data-route="control">관제</a>
-        <a href="#action" data-route="action">조치</a>
-        <a href="#report" data-route="report">접수</a>
-      </nav>
     </header>
+    <div class="page-head" id="page-head">
+      <div class="page-title" id="page-title"></div>
+      <div class="page-actions" id="page-actions"></div>
+    </div>
     <!-- JS 가 못 돌 때의 안내 (D5-27). CSS 도 안 불러와졌을 수 있어 스타일은 인라인으로 둔다.
          구형 브라우저에서도 읽혀야 하므로 아래 스크립트는 ES5 문법만 쓴다. -->
     <div id="boot-msg" role="alert" hidden

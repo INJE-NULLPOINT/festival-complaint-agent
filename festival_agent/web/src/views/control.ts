@@ -3,17 +3,17 @@
 // 3초 안에 "지금 제일 위험한 것 1개" 가 읽혀야 한다 (할일 D5-15). 카드는 '무엇이 · 어디서 · 무엇부터 · 무엇을 할지' 를 한 장에 담는다 (D5-29).
 // 서버가 issues[] 를 아직 안 주면(구버전) 예전 유형 단위 화면(심각도 1위 카드 + 유형 순위)으로 그린다.
 import { storedCode } from "../admin";
+import { kpiRow } from "./kpi";
 import { api, zones, type DeletedItem, type Issue, type IssueAction, type Quote, type ReviewItem, type Severity } from "../data";
 import {
-  LABELS, STATUS_LABEL, badge, delButton, esc, flipPlay, flipSnap, hhmm, jsonList, makeFresh, pop, reduced, stateBox, toast, toastAction,
+  LABELS, STATUS_LABEL, badge, delButton, esc, flipPlay, flipSnap, hhmm, jsonList, makeFresh, pop, reduced, skeletonBoard, stateBox, toast, toastAction,
   typeChip, typeIcon, uiIcon,
 } from "../ui";
 
-const open = new Set<string>();       // 계산식을 펼친 라벨 (다시 그려도 유지)
+const open = new Set<string>();       // 펼친 유형 행 (다시 그려도 유지)
 const openAlerts = new Set<number>(); // 펼친 알림
 const openFeed = new Set<number>();   // 펼친 유입 원문
 const openIssue = new Set<string>();  // 펼친 카드(행) — issue_key
-const openFx = new Set<string>();     // 계산식을 펼친 카드
 const grpOpen = new Set<string>();    // 펼친 묶음(그 밖 · 조치 중 · 조치 완료 · 유형별 순위)
 
 const name = (label: string) => LABELS[label] ?? label;
@@ -22,7 +22,10 @@ const name = (label: string) => LABELS[label] ?? label;
 const feedFresh = makeFresh();
 const alertFresh = makeFresh();
 const issueFresh = makeFresh();
-const prevBar = new Map<string, number>();          // 유형별 막대 폭 — 바뀐 만큼만 채워지게
+// '즉시' 가 새로 된 카드만 테두리가 두 번 숨 쉰다 (D5-44). 이미 즉시인 카드가 다시 그려질 때는 다시 뛰지 않는다.
+const lastGrade = new Map<string, string>();
+const pulseAt = new Map<string, number>();
+const PULSE_MS = 4800;          // 2.4s × 2번 — style.css 의 ic-breath 와 맞춘다
 const prevText = new Map<string, string>();         // 카드별 text_updated_at — 문구가 실제로 바뀐 카드만 강조
 const textChangedAt = new Map<string, number>();
 let prevTop: string | null = null;                  // 지난번 심각도 1위 — 바뀌면 카드가 살짝 바뀐다 (옛 화면)
@@ -62,7 +65,11 @@ function toCard(i: Issue): Card {
 
 export async function renderControl(root: HTMLElement): Promise<void> {
   lastRoot = root;
-  const [d, zs] = await Promise.all([api.control(), zones()]);
+  // 처음 불러오거나 다른 화면에서 넘어올 때만, 조금 늦어지면 회색 뼈대를 보여 준다 (빠르면 깜빡이지 않게 150ms 뒤에)
+  const skelTimer = root.querySelector(".kpis") ? undefined : window.setTimeout(() => { root.innerHTML = skeletonBoard(); }, 150);
+  const [d, zs] = await Promise.all([api.control(), zones()]).then(
+    (r) => { clearTimeout(skelTimer); return r; },
+    (e) => { clearTimeout(skelTimer); throw e; });
   const { sev, alerts } = d;
   const zoneName = new Map(zs.map((z) => [z.id, z.name]));
 
@@ -105,6 +112,9 @@ export async function renderControl(root: HTMLElement): Promise<void> {
   // 카드 문구(text_updated_at)가 바뀐 카드만 강조한다. 건수·마지막 시각·최신 민원이 바뀐 것은 조용히 갱신.
   const now = Date.now();
   for (const c of cards) {
+    const pg = lastGrade.get(c.issue_key);
+    if (c.grade === "immediate" && ((pg !== undefined && pg !== "immediate") || (pg === undefined && issueFresh.of(c.id).cls))) pulseAt.set(c.issue_key, now);
+    lastGrade.set(c.issue_key, c.grade);
     const before = prevText.get(c.issue_key);
     if (before !== undefined && before !== c.text_updated_at) textChangedAt.set(c.issue_key, now);
     prevText.set(c.issue_key, c.text_updated_at);
@@ -117,42 +127,38 @@ export async function renderControl(root: HTMLElement): Promise<void> {
   const rankList = (list: Severity[], startNo: number) => list.length ? `<ol class="rank" start="${startNo}">${list.map((s, i) => {
     const cr = countRank.get(s.label) ?? 0;
     const up = cr > i + startNo;   // 건수로는 더 아래인데 심각도로 올라온 유형
-    const w = Math.min(100, s.score);
     return `
           <li class="${open.has(s.label) ? "open" : ""}" data-label="${esc(s.label)}">
-            <button class="row" type="button" aria-expanded="${open.has(s.label)}">
+            <button class="row" type="button">
               <span class="no">${i + startNo}</span>
               <span class="name">${typeChip(s.label)}</span>
-              <span class="score">${s.score.toFixed(1)}</span>
               ${badge(s.grade)}
               <span class="sub">
                 <span class="${up ? "up" : ""}">${s.freq}건 · 건수 ${cr}위${up ? " ▲" : ""}</span>
-                <span class="bar" aria-hidden="true"><i data-w="${w}" style="width:${reduced() ? w : (prevBar.get(s.label) ?? 0)}%" class="g-${esc(s.grade)}"></i></span>
               </span>
             </button>
-            <div class="formula-box">${esc(s.formula)}</div>
           </li>`;
-  }).join("")}</ol>` : stateBox({ inline: true, icon: "inbox", title: "다른 유형은 아직 없습니다", hint: "민원이 분류되면 여기에 나타납니다." });
+  }).join("")}</ol>` : stateBox({ inline: true, icon: "inbox", title: "다른 유형 없음" });
 
   root.innerHTML = `
     <h1 class="sr-only">관제 — 지금 조치할 일</h1>
+    ${kpiRow(d)}
     <section class="card brief" aria-label="지금 조치할 일">
-      <h2 class="pg-title">지금 조치할 일 <span class="muted small">통합 에이전트 브리핑${b ? ` · ${hhmm(b.created_at)}` : ""}</span></h2>
+      <h2 class="pg-title">지금 조치할 일${b ? ` <span class="muted small">${hhmm(b.created_at)}</span>` : ""}</h2>
       ${b ? `<p class="brief-text">${leadSentence(b.text)}</p>${b.rationale ? `<p class="brief-why">근거: ${esc(b.rationale.replace(/^\s*근거\s*[:：]\s*/, ""))}</p>` : ""}`
-          : `<p class="muted">아직 브리핑이 없습니다. 민원이 들어오면 우선순위와 할 일이 자동으로 정리됩니다.</p>`}
+          : `<p class="muted">브리핑 없음</p>`}
       ${hasIssues && flipped && mine && lead ? `<p class="flip">건수 1위 <b>${esc(name(byCount[0].label))} ${byCount[0].freq}건</b>보다
         <b>${esc(lead.zone_name ?? "구역 미상")} ${esc(name(mine.label))} ${mine.freq}건</b>이 먼저입니다</p>` : ""}
     </section>
 
     ${hasIssues ? `
     ${main.length ? `<section class="icards" aria-label="조치할 일 카드">${main.map((c, i) => issueCard(c, i + 1, i === 0, zoneName)).join("")}</section>`
-      : `<section class="card">${stateBox({ icon: "check", title: "지금 바로 조치할 일은 없습니다",
-          hint: more.length + prog.length + done.length ? "조치 중이거나 완료된 건은 아래 묶음에서 볼 수 있습니다." : "새 민원이 들어오면 여기에 나타납니다." })}</section>`}
+      : `<section class="card">${stateBox({ icon: "check", title: "지금 바로 조치할 일 없음" })}</section>`}
     ${group("more", "그 밖", more, main.length + 1, zoneName)}
     ${group("in_progress", "조치 중", prog, 1, zoneName)}
     ${group("done", "조치 완료", done, 1, zoneName)}`
     : (top ? hero(top, countRank.get(top.label) ?? 0, flipped && byCount[0] ? byCount[0] : null, heroSwap) : `
-    <section class="card">${stateBox({ icon: "inbox", title: "아직 접수된 민원이 없습니다", hint: "QR로 민원이 들어오면 잠시 뒤 유형과 우선순위가 여기에 정리됩니다." })}</section>`)}
+    <section class="card">${stateBox({ icon: "inbox", title: "접수된 민원 없음" })}</section>`)}
 
     ${alerts.length ? `<ul class="alerts" aria-label="미확인 알림">${alerts.map((a) => { const fr = alertFresh.of(a.id); return `
       <li class="alert ${openAlerts.has(a.id) ? "open" : ""}${fr.cls}" style="${fr.style}" data-id="${a.id}">
@@ -167,11 +173,11 @@ export async function renderControl(root: HTMLElement): Promise<void> {
     <div class="grid2">
       ${hasIssues ? `
       <details class="card typerank" data-grp="rank" ${grpOpen.has("rank") ? "open" : ""}>
-        <summary><span class="typerank-t">유형별 순위</span> <span class="muted small">카드 점수의 근거${top ? ` · ${hhmm(top.as_of)} 기준` : ""}</span></summary>
-        ${sev.length ? rankList(sev, 1) : stateBox({ inline: true, icon: "inbox", title: "유형별 순위가 아직 없습니다", hint: "민원이 분류되면 나타납니다." })}
+        <summary><span class="typerank-t">유형별 순위</span> <span class="muted small">카드 순서의 근거${top ? ` · ${hhmm(top.as_of)} 기준` : ""}</span></summary>
+        ${sev.length ? rankList(sev, 1) : stateBox({ inline: true, icon: "inbox", title: "유형별 순위 없음" })}
       </details>` : `
       <section class="card">
-        <h2>그다음 순위 <span class="muted small">${top ? `${hhmm(top.as_of)} 기준 · 누르면 계산식` : ""}</span></h2>
+        <h2>그다음 순위 <span class="muted small">${top ? `${hhmm(top.as_of)} 기준` : ""}</span></h2>
         ${rankList(rest, 2)}
       </section>`}
 
@@ -194,7 +200,7 @@ export async function renderControl(root: HTMLElement): Promise<void> {
               </span>
             </button>
             ${delButton(f.id, `ft-${f.id}`)}</li>`;
-        }).join("") || `<li class="state-li">${stateBox({ inline: true, icon: "inbox", title: "아직 접수된 민원이 없습니다", hint: "QR로 접수되면 여기에 나타납니다." })}</li>`}</ul>
+        }).join("") || `<li class="state-li">${stateBox({ inline: true, icon: "inbox", title: "접수된 민원 없음" })}</li>`}</ul>
       </section>
     </div>`;
 
@@ -210,16 +216,6 @@ export async function renderControl(root: HTMLElement): Promise<void> {
     li.querySelector(".alert-row")!.addEventListener("click", () => toggle(openAlerts as Set<string | number>, Number(li.dataset.id), li)));
   root.querySelectorAll<HTMLElement>(".feed li[data-id]").forEach((li) =>
     li.querySelector(".feed-item")!.addEventListener("click", () => toggle(openFeed as Set<string | number>, Number(li.dataset.id), li)));
-  const hb = root.querySelector<HTMLButtonElement>("#hero-formula");
-  hb?.addEventListener("click", () => {
-    const box = root.querySelector<HTMLElement>("#hero-formula-box")!;
-    const show = box.hidden;
-    box.hidden = !show;
-    hb.textContent = show ? "계산식 접기" : "계산식 보기";
-    hb.setAttribute("aria-expanded", String(show));
-    show ? open.add(`hero:${top!.label}`) : open.delete(`hero:${top!.label}`);
-    if (show) pop(box);
-  });
 
   // ── 카드 (D5-29)
   root.querySelectorAll<HTMLElement>(".icard:not(.big)").forEach((el) => {
@@ -231,17 +227,6 @@ export async function renderControl(root: HTMLElement): Promise<void> {
       if (openIssue.has(k)) pop(el);
     });
   });
-  root.querySelectorAll<HTMLButtonElement>("[data-fx]").forEach((btn) =>
-    btn.addEventListener("click", () => {
-      const k = btn.dataset.fx!;
-      const box = btn.closest(".icard")!.querySelector<HTMLElement>(".ic-fx")!;
-      const show = box.hidden;
-      box.hidden = !show;
-      btn.textContent = show ? "계산식 접기" : "계산식 보기";
-      btn.setAttribute("aria-expanded", String(show));
-      show ? openFx.add(k) : openFx.delete(k);
-      if (show) pop(box);
-    }));
   root.querySelectorAll<HTMLDetailsElement>("details[data-grp]").forEach((det) =>
     det.addEventListener("toggle", () => { det.open ? grpOpen.add(det.dataset.grp!) : grpOpen.delete(det.dataset.grp!); }));
   root.querySelectorAll<HTMLButtonElement>("[data-gen]").forEach((btn) =>
@@ -290,13 +275,10 @@ export async function renderControl(root: HTMLElement): Promise<void> {
   // 열려 있는 동안 서버의 지운 개수가 바뀌면(내가 또 지웠거나 다른 운영자가 처리) 목록도 새로 가져온다
   if (dlOpen && dlItems && deletedNow !== dlCount && !dlRefreshing) void refreshDeleted(root);
 
-  // 순위·유입이 옮겨진 만큼만 미끄러지고, 점수 막대는 바뀐 만큼만 채워진다
+  // 순위·유입이 옮겨진 만큼만 미끄러진다
   flipPlay(root, ".rank li", "label", snapRank);
   flipPlay(root, ".feed li[data-id]", "id", snapFeed);
   flipPlay(root, ".icard[data-key]", "key", snapCards);
-  const bars = root.querySelectorAll<HTMLElement>(".bar i[data-w]");
-  if (!reduced()) requestAnimationFrame(() => requestAnimationFrame(() => bars.forEach((i) => { i.style.width = `${i.dataset.w}%`; })));
-  sev.forEach((s) => prevBar.set(s.label, Math.min(100, s.score)));
   prevTop = top ? top.label : null;
 }
 
@@ -405,7 +387,7 @@ function rvPanel(items: ReviewItem[], total: number, zoneName: Map<number, strin
                 <button type="button" class="btn" data-del="${it.id}" aria-label="민원 지우기">지우기</button>
               </div>
             </li>`;
-          }).join("")}</ul>` : `<div class="rvp-empty">${stateBox({ inline: true, icon: "check", title: "확인이 필요한 민원이 없습니다", hint: "모두 처리했습니다." })}</div>`}
+          }).join("")}</ul>` : `<div class="rvp-empty">${stateBox({ inline: true, icon: "check", title: "확인 필요 민원 없음" })}</div>`}
           ${rest > 0 ? `<p class="muted small rvp-more">그 밖 ${rest}건은 위 항목을 처리하면 이어서 나옵니다.</p>` : ""}
         </section>`;
 }
@@ -413,7 +395,7 @@ function rvPanel(items: ReviewItem[], total: number, zoneName: Map<number, strin
 /** 유입 제목 옆 '지운 민원 N' — 누르면 지운 민원 목록이 열린다 (D5-42). 목록이 열려 있으면 0건이 되어도 버튼을 남겨 닫을 수 있게 한다. */
 function deletedChip(n: number): string {
   if (n <= 0 && !dlOpen) return "";
-  return ` · <button type="button" class="dl-btn${dlOpen ? " open" : ""}" data-dl-toggle aria-expanded="${dlOpen}" aria-controls="dlp" title="눌러서 지운 민원을 보고 되돌립니다">지운 민원 <b>${n}</b></button>`;
+  return ` · <button type="button" class="dl-btn${dlOpen ? " open" : ""}" data-dl-toggle aria-expanded="${dlOpen}" aria-controls="dlp">지운 민원 <b>${n}</b></button>`;
 }
 
 /** 지운 시각 표시: 오늘이면 시:분, 아니면 월-일 시:분 */
@@ -444,7 +426,7 @@ function dlPanel(): string {
               <p class="rvi-text" id="dt-${it.id}">${esc(it.raw_text)}</p>
               <div class="rvi-acts"><button type="button" class="btn" data-restore="${it.id}" aria-describedby="dt-${it.id}">되돌리기</button></div>
             </li>`).join("")}</ul>`
-            : `<div class="rvp-empty">${stateBox({ inline: true, icon: "check", title: "지운 민원이 없습니다", hint: "지운 민원이 생기면 여기에서 되돌릴 수 있습니다." })}</div>`}
+            : `<div class="rvp-empty">${stateBox({ inline: true, icon: "check", title: "지운 민원 없음" })}</div>`}
         </section>`;
 }
 
@@ -541,10 +523,13 @@ function issueCard(c: Card, no: number, big: boolean, zoneName: Map<number, stri
   const chMs = ch === undefined ? -1 : Date.now() - ch;
   const chOn = ch !== undefined && chMs >= 0 && chMs < 900;
   if (ch !== undefined && !chOn) textChangedAt.delete(c.issue_key);
+  const pa = pulseAt.get(c.issue_key);
+  const paMs = pa === undefined ? -1 : Date.now() - pa;
+  const pOn = c.grade === "immediate" && pa !== undefined && paMs >= 0 && paMs < PULSE_MS;
+  if (pa !== undefined && !pOn) pulseAt.delete(c.issue_key);
   const zone = c.zone_name ?? (c.zone_id != null ? zoneName.get(c.zone_id) : null) ?? "구역 미상";
   const st = c.action_status;
   const stText = st ? (STATUS_LABEL[st] ?? st) : "요청서 없음";
-  const srcText = c.text_source === "llm" ? "AI 정리" : "기본 문구";
   // 결과가 큰 조치(대피·중단·통제 등)는 일반 조치와 섞지 않고 별도 칸에 둔다. 서버가 조치마다 표시를 주면 그것을, 아니면 카드 표시 + 말로 가린다.
   const isRisky = (a: { text: string; needs_judgment?: number }) => !!a.needs_judgment || (!!c.needs_judgment && ESCALATION.test(a.text));
   const normal = c.actions.filter((a) => !isRisky(a));
@@ -580,7 +565,7 @@ function issueCard(c: Card, no: number, big: boolean, zoneName: Map<number, stri
         <p class="ic-who">담당 <b>${esc(c.department ?? "-")}</b>${c.contact ? ` · <a href="tel:${esc(c.contact.replace(/[^0-9+]/g, ""))}">${esc(c.contact)}</a>` : ""}</p>
         <div class="ic-quotes">
           <section class="ic-q" aria-label="판단 근거">
-            <h4 class="ic-h2">판단 근거 <span class="muted small">문구가 바뀔 때만 바뀜</span></h4>
+            <h4 class="ic-h2">판단 근거</h4>
             <ul>${c.evidence.map((q) => quoteLi(q, false)).join("") || `<li class="muted">아직 없음</li>`}</ul>
           </section>
           <section class="ic-q" aria-label="최신 민원">
@@ -592,13 +577,11 @@ function issueCard(c: Card, no: number, big: boolean, zoneName: Map<number, stri
           <button class="btn ${!st && (c.grade === "immediate" || c.grade === "high") ? "primary" : ""}" data-gen="${esc(c.label)}">${esc(name(c.label))} 전체 요청서 ${st && st !== "done" ? "다시 생성" : "생성"}</button>
           <span class="st st-${esc(st ?? "none")}">${esc(stText)}</span>
           <a class="linkbtn" href="#action">조치 화면에서 상태 바꾸기</a>
-          <button type="button" class="linkbtn" data-fx="${esc(c.issue_key)}" aria-expanded="${openFx.has(c.issue_key)}">${openFx.has(c.issue_key) ? "계산식 접기" : "계산식 보기"}</button>
         </div>
-        <div class="formula-box ic-fx" ${openFx.has(c.issue_key) ? "" : "hidden"}>카드 점수 ${esc(c.formula)}</div>
-        <p class="ic-src muted small">${srcText}${c.text_updated_at ? ` · ${hhmm(c.text_updated_at)} 정리` : ""}</p>
+        ${c.text_source === "llm" ? `<p class="ic-src muted small">AI 정리${c.text_updated_at ? ` · ${hhmm(c.text_updated_at)}` : ""}</p>` : ""}
       </div>`;
-  const cls = `icard g-${esc(c.grade)}${big ? " big" : ""}${opened && !big ? " open" : ""}${fr.cls}${chOn ? " retext" : ""}`;
-  const style = fr.style || (chOn ? `animation-delay:-${chMs}ms` : "");
+  const cls = `icard g-${esc(c.grade)}${big ? " big" : ""}${opened && !big ? " open" : ""}${fr.cls}${chOn ? " retext" : ""}${pOn ? " pulse" : ""}`;
+  const style = (fr.style || (chOn ? `animation-delay:-${chMs}ms` : "")) + (pOn ? `;--pd:-${paMs}ms` : "");
   return big ? `
     <article class="${cls}" data-key="${esc(c.issue_key)}" style="${style}">
       <div class="ic-head">
@@ -623,20 +606,16 @@ function issueCard(c: Card, no: number, big: boolean, zoneName: Map<number, stri
 
 /** (구버전 서버용) 심각도 1위 — 화면에서 가장 크게. */
 function hero(s: Severity, countRank: number, countTop: Severity | null, swap: boolean): string {
-  const shown = open.has(`hero:${s.label}`);
   return `
     <section class="card hero g-${esc(s.grade)}${swap ? " swap" : ""}" aria-label="심각도 1위">
       <p class="hero-kicker">심각도 1위 · ${hhmm(s.as_of)} 기준</p>
       <div class="hero-main">
         <span class="hero-name">${typeChip(s.label)}</span>
         ${badge(s.grade)}
-        <span class="hero-score">${s.score.toFixed(1)}<small> 점</small></span>
       </div>
       <p class="hero-sub">${s.freq}건 · 건수로는 ${countRank}위</p>
       ${countTop ? `<p class="flip">건수 1위 <b>${esc(name(countTop.label))} ${countTop.freq}건</b>보다
         <b>${esc(name(s.label))} ${s.freq}건</b>이 먼저입니다</p>` : ""}
-      <button type="button" class="linkbtn" id="hero-formula" aria-expanded="${shown}">${shown ? "계산식 접기" : "계산식 보기"}</button>
-      <div class="formula-box" id="hero-formula-box" ${shown ? "" : "hidden"}>${esc(s.formula)}</div>
     </section>`;
 }
 

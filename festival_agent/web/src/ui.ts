@@ -257,3 +257,40 @@ export function toastAction(msg: string, actionLabel: string, onAction: () => vo
   el.addEventListener("focusout", (e) => { if (!el.contains(e.relatedTarget as Node | null)) resume(); });
   arm();
 }
+
+/** 처음 불러오는 동안 KPI·카드 자리에 보여 줄 회색 뼈대 (D5-44). 스크린리더에는 '불러오는 중' 한 줄만 읽힌다. */
+export function skeletonBoard(): string {
+  const kpi = `<div class="kpi skel-box"><span class="skel skel-s"></span><span class="skel skel-l"></span><span class="skel skel-s w60"></span></div>`;
+  const card = `<section class="card skel-box" aria-hidden="true"><span class="skel skel-m"></span><span class="skel skel-s"></span><span class="skel skel-s w60"></span></section>`;
+  return `<p class="sr-only" role="status">불러오는 중…</p>
+    <section class="kpis" aria-hidden="true">${kpi.repeat(4)}</section>${card}${card}`;
+}
+
+/** 사이드바 선택 표시가 메뉴 사이를 미끄러지게 한다 (D5-44). 선택 칸(.side-mark)을 하나 두고 a.on 위치로 옮긴다.
+ *  main.ts 가 a.on 을 바꾸면 class 변화를 보고 따라간다 — main.ts 를 고치지 않는다. 첫 배치는 움직이지 않는다. */
+function initNavMark(): void {
+  const nav = document.getElementById("tabs");
+  if (!nav || typeof MutationObserver === "undefined") return;
+  const mark = document.createElement("span");
+  mark.className = "side-mark";
+  mark.setAttribute("aria-hidden", "true");
+  nav.appendChild(mark);
+  let placed = false;
+  const place = (): void => {
+    const on = nav.querySelector<HTMLElement>("a.on");
+    if (!on || !on.offsetHeight) { nav.classList.remove("has-mark"); return; }
+    mark.style.height = `${on.offsetHeight}px`;
+    mark.style.transform = `translateY(${on.offsetTop}px)`;
+    nav.classList.add("has-mark");
+    if (!placed) {
+      placed = true;   // 첫 자리는 바로, 그다음부터 미끄러진다
+      requestAnimationFrame(() => requestAnimationFrame(() => nav.classList.add("mark-anim")));
+    }
+  };
+  new MutationObserver((recs) => { if (recs.some((r) => r.target !== nav)) place(); })
+    .observe(nav, { attributes: true, subtree: true, attributeFilter: ["class"] });
+  window.addEventListener("resize", place);
+  if (document.fonts && document.fonts.ready) void document.fonts.ready.then(place);
+  place();
+}
+initNavMark();
