@@ -2,7 +2,7 @@
 //   #control  관제 (기본)     #action  조치     #report  접수 (QR)
 //   ?v=qr     방문객용 — 상단 탭을 숨기고 접수 화면만 보인다.
 import "./style.css";
-import { api } from "./data";
+import { api, onHeaderMeta } from "./data";
 import { LABELS, resetFresh, toast } from "./ui";
 import { renderAction } from "./views/action";
 import { renderControl } from "./views/control";
@@ -58,8 +58,24 @@ function refresh(): void {
   timer = window.setTimeout(draw, 500);
 }
 
-const backendName = api.name === "local" ? "local 대역" : "Supabase";
+const backendName = api.name === "local" ? "로컬 DB" : "Supabase";
 live.textContent = `연결 중 · ${backendName}`; // 연결 전에도 어느 백엔드인지 보이게
+
+// 헤더 배지 2개 + 합성 표시: ① 데이터(#live: 로컬 DB / Supabase) ② AI 해석 방식 ③ 합성 데이터 포함.
+// ②는 서버가 backend_llm 을 줄 때만 보인다 — 모르는 값을 짐작해서 적지 않는다.
+const AI_LABEL: Record<string, string> = { claude_code: "AI: Claude Code (개발용)", anthropic: "AI: Claude API", local: "AI: 규칙 대역" };
+const chipAi = document.getElementById("chip-ai")!;
+const chipSyn = document.getElementById("chip-syn")!;
+function setChip(el: HTMLElement, text: string | null): void {
+  el.hidden = !text;
+  if (text !== null && el.textContent !== text) el.textContent = text;
+}
+if (!visitor) {
+  onHeaderMeta((m) => {
+    setChip(chipAi, m.backend_llm ? (AI_LABEL[m.backend_llm] ?? `AI: ${m.backend_llm}`) : null);
+    setChip(chipSyn, m.synthetic?.on ? `합성 데이터 포함 · ${m.synthetic.count}건` : null);
+  });
+}
 
 function subscribe(): void {
   api.subscribe({

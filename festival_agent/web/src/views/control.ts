@@ -3,7 +3,7 @@
 // 3초 안에 "지금 제일 위험한 것 1개" 가 읽혀야 한다 (할일 D5-15). 카드는 '무엇이 · 어디서 · 무엇부터 · 무엇을 할지' 를 한 장에 담는다 (D5-29).
 // 서버가 issues[] 를 아직 안 주면(구버전) 예전 유형 단위 화면(심각도 1위 카드 + 유형 순위)으로 그린다.
 import { storedCode } from "../admin";
-import { api, zones, type Issue, type IssueAction, type Quote, type Severity } from "../data";
+import { api, zones, type Issue, type IssueAction, type Quote, type ReviewItem, type Severity } from "../data";
 import {
   LABELS, STATUS_LABEL, badge, delButton, esc, flipPlay, flipSnap, hhmm, jsonList, makeFresh, pop, reduced, toast, toastAction,
   typeChip, typeIcon, uiIcon,
@@ -31,6 +31,12 @@ let prevTop: string | null = null;                  // 지난번 심각도 1위 
 const hidden = new Set<number>();
 let lastRoot: HTMLElement | null = null;
 
+// 확인 필요 처리 (D5-32): 패널이 열려 있는지, 처리(유형 지정·닫기)해서 바로 숨긴 항목
+let rvOpen = false;
+const hiddenReview = new Set<number>();
+/** 확인 필요 처리에서 고를 수 있는 유형 (긍정 포함: 진짜 칭찬이면 긍정으로) */
+const REVIEW_LABELS = ["safety", "crowd", "parking", "restroom", "price", "guide", "positive"];
+
 /** 결과가 큰 조치에 들어가는 말 — core/config.py ESCALATION_WORDS 와 같게 유지. 서버가 조치마다 표시를 주면 그것을 먼저 쓴다. */
 const ESCALATION = /중단|폐쇄|대피|통제|출동|119|112|경찰|소방|구급/;
 
@@ -56,9 +62,14 @@ export async function renderControl(root: HTMLElement): Promise<void> {
   // 서버가 이미 뺀 민원은 '숨김 대기' 목록에서 정리한다 (다른 곳에서 되돌려도 다시 보이게)
   const present = new Set<number>(d.feed.map((f) => f.id));
   for (const i of d.issues ?? []) for (const q of jsonList<Quote>(i.latest_quotes)) present.add(q.id);
+  for (const r of d.review_items ?? []) present.add(r.id);
   hidden.forEach((id) => { if (!present.has(id)) hidden.delete(id); });
+  // 서버가 이미 처리한 확인 필요 항목은 '숨김 대기'에서 정리한다 (되돌려서 다시 확인 필요가 되면 다시 보이게)
+  const reviewIds = new Set((d.review_items ?? []).map((r) => r.id));
+  hiddenReview.forEach((id) => { if (!reviewIds.has(id)) hiddenReview.delete(id); });
 
   const feed = d.feed.filter((f) => !hidden.has(f.id));
+  const rvItems = (d.review_items ?? []).filter((r) => !hidden.has(r.id) && !hiddenReview.has(r.id));
   const cards = (d.issues ?? []).map(toCard);
   const hasIssues = cards.length > 0;
   const main = cards.filter((c) => c.grp === "main");
@@ -136,8 +147,8 @@ export async function renderControl(root: HTMLElement): Promise<void> {
     ${alerts.length ? `<ul class="alerts" aria-label="미확인 알림">${alerts.map((a) => { const fr = alertFresh.of(a.id); return `
       <li class="alert ${openAlerts.has(a.id) ? "open" : ""}${fr.cls}" style="${fr.style}" data-id="${a.id}">
         <button type="button" class="alert-row" aria-expanded="${openAlerts.has(a.id)}">
-          ${gradeOf.has(a.label) ? badge(gradeOf.get(a.label)!) : ""}
-          <b>${typeChip(a.label, true)}</b>
+          ${a.kind !== "review_safety_stale" && gradeOf.has(a.label) ? badge(gradeOf.get(a.label)!) : ""}
+          <b>${a.kind === "review_safety_stale" ? `<span class="flag judge">확인 필요</span>` : typeChip(a.label, true)}</b>
           <span class="alert-text">${esc(stripLabel(a.detail))}</span>
           <span class="alert-time">${hhmm(a.created_at)}</span>
         </button>
@@ -155,7 +166,8 @@ export async function renderControl(root: HTMLElement): Promise<void> {
       </section>`}
 
       <section class="card">
-        <h2>실시간 유입 <span class="muted counts">누적 <b>${d.total}</b> · 분류 대기 <b>${d.pending}</b>${reviewCounts(d.review ?? 0, d.review_safety ?? 0)}${d.deleted ? ` · 지운 민원 <b>${d.deleted}</b>` : ""}</span></h2>
+        <h2>실시간 유입 <span class="muted counts">누적 <b>${d.total}</b> · 분류 대기 <b>${d.pending}</b>${reviewCounts(d.review ?? 0, d.review_safety ?? 0, d.review_items !== undefined && (d.review ?? 0) > 0)}${d.deleted ? ` · 지운 민원 <b>${d.deleted}</b>` : ""}</span></h2>
+        ${d.review_items !== undefined && ((d.review ?? 0) > 0 || rvItems.length) ? rvPanel(rvItems, d.review ?? 0, zoneName) : ""}
         <ul class="feed">${feed.map((f) => {
           const done = f.status === "done" && f.label;
           const review = f.status === "review";   // 근거 없거나 신뢰도가 낮아 유형을 못 정한 민원 — 운영자가 봐야 한다
@@ -164,7 +176,7 @@ export async function renderControl(root: HTMLElement): Promise<void> {
             <button type="button" class="feed-item" title="${esc(f.raw_text)}">
               <span class="feed-text">${esc(f.raw_text)}</span>
               <span class="meta">
-                <span class="tag ${done ? "" : review ? "review" : "wait"}">${done ? typeChip(f.label!, true) : review ? "확인 필요" : "분류 중"}</span>
+                <span class="tag ${done ? "" : review ? "review" : f.status === "dismissed" ? "none" : "wait"}">${done ? typeChip(f.label!, true) : review ? "확인 필요" : f.status === "dismissed" ? "유형 없음" : "분류 중"}</span>
                 ${f.receipt_no ? `<span class="rcpt" title="방문객 접수번호">W-${f.receipt_no}</span>` : ""}
                 <span>${esc(f.zone_id == null ? "구역 미상" : (zoneName.get(f.zone_id) ?? "구역 미상"))}</span>
                 <span>${hhmm(f.ingested_at)}</span>
@@ -236,6 +248,31 @@ export async function renderControl(root: HTMLElement): Promise<void> {
   root.querySelectorAll<HTMLButtonElement>("[data-del]").forEach((btn) =>
     btn.addEventListener("click", (e) => { e.stopPropagation(); void removeFeedback(Number(btn.dataset.del)); }));
 
+  // ── 확인 필요 처리 패널 (D5-32)
+  const rvBtn = root.querySelector<HTMLButtonElement>("[data-rv-toggle]");
+  const rvBox = root.querySelector<HTMLElement>("#rvp");
+  rvBtn?.addEventListener("click", () => {
+    rvOpen = !rvOpen;
+    if (rvBox) { rvBox.hidden = !rvOpen; if (rvOpen) pop(rvBox); }
+    rvBtn.setAttribute("aria-expanded", String(rvOpen));
+    rvBtn.classList.toggle("open", rvOpen);
+  });
+  root.querySelector<HTMLButtonElement>("[data-rv-close]")?.addEventListener("click", () => {
+    rvOpen = false;
+    if (rvBox) rvBox.hidden = true;
+    rvBtn?.setAttribute("aria-expanded", "false");
+    rvBtn?.classList.remove("open");
+    rvBtn?.focus();
+  });
+  root.querySelectorAll<HTMLSelectElement>(".rvi-pick select").forEach((sel) =>
+    sel.addEventListener("change", () => {
+      const label = sel.value;
+      sel.value = "";   // 다시 처음 상태로 (같은 유형을 또 고를 수 있게)
+      if (label) void processReview(Number(sel.dataset.rid), "resolve", label);
+    }));
+  root.querySelectorAll<HTMLButtonElement>("[data-dismiss]").forEach((btn) =>
+    btn.addEventListener("click", () => void processReview(Number(btn.dataset.dismiss), "dismiss")));
+
   // 순위·유입이 옮겨진 만큼만 미끄러지고, 점수 막대는 바뀐 만큼만 채워진다
   flipPlay(root, ".rank li", "label", snapRank);
   flipPlay(root, ".feed li[data-id]", "id", snapFeed);
@@ -281,6 +318,79 @@ async function removeFeedback(id: number): Promise<void> {
     feedFresh.forget(id);
     if (lastRoot) void renderControl(lastRoot);   // 서버 알림(SSE)을 기다리지 않고 바로 돌려놓는다
   });
+}
+
+/** 확인 필요 항목 하나를 처리한다: 유형 지정(resolve) 또는 유형 없음으로 닫기(dismiss). 처리되면 목록에서 빠지고 5초 동안 [되돌리기](reopen).
+ *  운영자 코드를 이미 입력했으면 바로 숨기고, 아직이면 코드 입력 창이 뜬 뒤(입력을 마치면) 숨긴다 — 지우기와 같다. */
+async function processReview(id: number, kind: "resolve" | "dismiss", label?: string): Promise<void> {
+  const hide = () => {
+    hiddenReview.add(id);
+    document.querySelectorAll<HTMLElement>(`.rvi[data-rid="${id}"]`).forEach((el) => {
+      if (reduced()) { el.classList.add("gone"); return; }
+      el.classList.add("leaving");
+      setTimeout(() => el.classList.add("gone"), 200);
+    });
+  };
+  const early = !!storedCode();
+  if (early) hide();
+  try {
+    if (kind === "resolve") await api.resolveReview(id, label!);
+    else await api.dismissReview(id);
+  } catch (e) {
+    if (early) {
+      hiddenReview.delete(id);
+      if (lastRoot) void renderControl(lastRoot);   // 숨겼던 것을 되살린다
+    }
+    toast((e as Error).message, "warn");
+    return;
+  }
+  if (!early) hide();
+  toastAction(kind === "resolve" ? `유형 지정 (${name(label!)})` : "유형 없음으로 닫았습니다", "되돌리기", async () => {
+    try {
+      await api.reopenReview(id);
+    } catch (e) {
+      toast((e as Error).message, "warn");
+      return;
+    }
+    hiddenReview.delete(id);
+    if (lastRoot) void renderControl(lastRoot);   // 다시 확인 필요 목록으로 돌아온다
+  });
+}
+
+/** 확인 필요 처리 패널: 안전 의심이 먼저(서버가 그 순서로 준다). 행마다 원문 · 구역 · 시각 · 모델 제안 + 버튼 3개. */
+function rvPanel(items: ReviewItem[], total: number, zoneName: Map<number, string>): string {
+  const rest = total - items.length - hiddenReview.size;
+  return `
+        <section class="rvp" id="rvp" aria-label="확인 필요 처리" ${rvOpen ? "" : "hidden"}>
+          <div class="rvp-head">
+            <p class="rvp-t"><b>확인 필요 ${items.length}건</b> <span class="muted small">안전 의심이 먼저 · 유형을 정하거나, 유형 없음으로 닫거나, 지워 주세요</span></p>
+            <button type="button" class="linkbtn" data-rv-close>접기</button>
+          </div>
+          ${items.length ? `<ul class="rvlist">${items.map((it) => {
+            const zone = it.zone ?? (it.zone_id != null ? zoneName.get(it.zone_id) : null) ?? "구역 미상";
+            return `
+            <li class="rvi${it.is_safety ? " safe" : ""}" data-rid="${it.id}" data-fid="${it.id}">
+              <div class="rvi-meta">
+                ${it.is_safety ? `<span class="flag judge">안전 의심</span>` : ""}
+                <span class="ty">${uiIcon("pin")}<span>${esc(zone)}</span></span>
+                <span>${hhmm(it.ingested_at)}</span>
+              </div>
+              <p class="rvi-text">${esc(it.raw_text)}</p>
+              <p class="rvi-sug muted">${it.suggested_label ? `모델 제안 ${typeChip(it.suggested_label, true)}` : "모델 제안 없음"}${it.confidence != null ? ` · 신뢰도 ${Math.round(it.confidence * 100)}%` : ""}</p>
+              <div class="rvi-acts">
+                <label class="btn rvi-pick">유형 지정 ▾
+                  <select data-rid="${it.id}" aria-label="유형 지정 (민원 ${it.id})">
+                    <option value="">유형 고르기</option>
+                    ${REVIEW_LABELS.map((l) => `<option value="${l}">${esc(name(l))}${l === it.suggested_label ? " · 모델 제안" : ""}</option>`).join("")}
+                  </select>
+                </label>
+                <button type="button" class="btn" data-dismiss="${it.id}">유형 없음으로 닫기</button>
+                <button type="button" class="btn" data-del="${it.id}" aria-label="민원 지우기">지우기</button>
+              </div>
+            </li>`;
+          }).join("")}</ul>` : `<p class="muted rvp-empty">처리할 확인 필요 민원이 없습니다.</p>`}
+          ${rest > 0 ? `<p class="muted small rvp-more">그 밖 ${rest}건은 위 항목을 처리하면 이어서 나옵니다.</p>` : ""}
+        </section>`;
 }
 
 /** 접이식 묶음(그 밖 · 조치 중 · 조치 완료). 비어 있으면 그리지 않는다. */
@@ -400,11 +510,15 @@ function hero(s: Severity, countRank: number, countTop: Severity | null, swap: b
 }
 
 /** 유입 제목 옆 '확인 필요 N' (안전 의심이 있으면 'N · 안전 의심 M'). 0 이면 조용하게, 있으면 눈에 띄게 (D5-26 ④). */
-function reviewCounts(n: number, safety: number): string {
+function reviewCounts(n: number, safety: number, canOpen = false): string {
   const on = n > 0 ? " on" : "";
   const sus = safety > 0
     ? `<span class="rv-sep" aria-hidden="true">·</span><span class="rv-safe" role="img" aria-label="안전 의심 ${safety}건">${typeIcon("safety")}<span>안전 의심 <b>${safety}</b></span></span>` : "";
-  return ` · <span class="rv${on}"><span>확인 필요 <b>${n}</b></span>${sus}</span>`;
+  const inner = `<span>확인 필요 <b>${n}</b></span>${sus}`;
+  // 처리할 수 있는 서버면 버튼 (누르면 처리 패널이 열린다). 아니면 예전처럼 표시만.
+  return canOpen
+    ? ` · <button type="button" class="rv${on}${rvOpen ? " open" : ""}" data-rv-toggle aria-expanded="${rvOpen}" aria-controls="rvp" title="눌러서 확인 필요 민원 처리">${inner}</button>`
+    : ` · <span class="rv${on}">${inner}</span>`;
 }
 
 /** 브리핑 첫 문장(결론)만 굵게. 문장을 자르지 않고 표시만 나눈다 — 원문은 그대로 다 보인다. */

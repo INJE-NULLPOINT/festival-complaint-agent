@@ -1,7 +1,21 @@
 // Supabase — anon 키로 읽고, 쓰기는 RPC 3개로만 한다 (supabase/schema.sql).
 import { createClient } from "@supabase/supabase-js";
 import { AdminDenied } from "./admin";
-import type { Backend, FeedItem, Severity } from "./data";
+import type { Backend, FeedItem, ReviewItem, Severity } from "./data";
+
+/** classification + feedback 임베드 행을 ReviewItem 으로. 순서는 서버(local)와 같다: 안전 의심 먼저, 그 안에서는 오래된 것 먼저, 최대 20건. */
+function reviewItems(rows: any[] | null): ReviewItem[] {
+  const list = (rows ?? []).map((r) => {
+    const f = Array.isArray(r.feedback) ? r.feedback[0] : r.feedback;
+    return {
+      id: f.id as number, raw_text: f.raw_text as string, ingested_at: f.ingested_at as string, posted_at: f.posted_at as string | null,
+      zone_id: (f.zone_id ?? null) as number | null, suggested_label: (r.suggested_label ?? null) as string | null,
+      is_safety: Number(r.is_safety ?? 0), confidence: r.confidence == null ? null : Number(r.confidence),
+    } as ReviewItem;
+  });
+  list.sort((a, b) => b.is_safety - a.is_safety || a.ingested_at.localeCompare(b.ingested_at) || a.id - b.id);
+  return list.slice(0, 20);
+}
 
 export function supabaseBackend(url: string, key: string): Backend {
   const sb = createClient(url, key);
@@ -58,7 +72,7 @@ export function supabaseBackend(url: string, key: string): Backend {
     },
 
     async control() {
-      const [sev, brief, feed, pending, total, alerts, review, reviewSafety, issues, deleted] = await Promise.all([
+      const [sev, brief, feed, pending, total, alerts, review, reviewSafety, issues, deleted, reviewRows, synth] = await Promise.all([
         latestSeverity(),
         sb.from("briefing").select("*").order("id", { ascending: false }).limit(1),
         // 지운(숨긴) 민원은 빼고 보여 준다 — deleted_at IS NULL (D5-30)
@@ -74,6 +88,13 @@ export function supabaseBackend(url: string, key: string): Backend {
         sb.from("issue").select("*").eq("active", 1).order("rank_no"),
         // 지운 민원 개수 (D5-30)
         sb.from("feedback").select("id", { count: "exact", head: true }).not("deleted_at", "is", null),
+        // 확인 필요 목록 (D5-32): status='review' 인 분류 + 그 민원. 지운 민원은 뺀다. 최대 20건 (webapi 의 review_items 와 같다)
+        sb.from("classification")
+          .select("feedback_id,suggested_label,is_safety,confidence,feedback!inner(id,raw_text,ingested_at,posted_at,zone_id,deleted_at)")
+          .eq("status", "review").is("feedback.deleted_at", null).limit(60),
+        // 합성·재생 민원 개수 (헤더 '합성 데이터' 배지). 집계 창 기준은 서버만 알아서, 여기서는 지우지 않은 전체로 센다.
+        // 실패해도(열 없음 등) 관제를 막지 않도록 must() 에 넣지 않는다.
+        sb.from("feedback").select("id", { count: "exact", head: true }).is("deleted_at", null).in("source", ["replay", "demo", "dev"]),
       ]);
       const items: FeedItem[] = (must(feed) ?? []).map((f: any) => {
         const c = Array.isArray(f.classification) ? f.classification[0] : f.classification;
@@ -88,6 +109,8 @@ export function supabaseBackend(url: string, key: string): Backend {
         review_safety: reviewSafety.count ?? 0,
         issues: must(issues) ?? [],
         deleted: deleted.count ?? 0,
+        synthetic: { on: (synth.count ?? 0) > 0, count: synth.count ?? 0 },
+        review_items: reviewItems(must(reviewRows) as any[] | null),
         total: total.count ?? 0,
         alerts: must(alerts) ?? [],
       };
@@ -127,6 +150,15 @@ export function supabaseBackend(url: string, key: string): Backend {
     },
     async restoreFeedback(id, code) {
       await adminRpc("restore_feedback", { p_id: id }, code);
+    },
+    async resolveReview(id, label, code) {
+      await adminRpc("resolve_review", { p_id: id, p_label: label }, code);
+    },
+    async dismissReview(id, code) {
+      await adminRpc("dismiss_review", { p_id: id }, code);
+    },
+    async reopenReview(id, code) {
+      await adminRpc("reopen_review", { p_id: id }, code);
     },
 
     subscribe(h) {

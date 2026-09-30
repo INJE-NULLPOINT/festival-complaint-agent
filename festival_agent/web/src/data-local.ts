@@ -46,6 +46,9 @@ export function localBackend(): Backend {
       call("/api/rpc/set_action_status", { p_id: id, p_status: status }, code),
     deleteFeedback: (id, code) => call("/api/rpc/delete_feedback", { p_id: id }, code),
     restoreFeedback: (id, code) => call("/api/rpc/restore_feedback", { p_id: id }, code),
+    resolveReview: (id, label, code) => call("/api/rpc/resolve_review", { p_id: id, p_label: label }, code),
+    dismissReview: (id, code) => call("/api/rpc/dismiss_review", { p_id: id }, code),
+    reopenReview: (id, code) => call("/api/rpc/reopen_review", { p_id: id }, code),
 
     subscribe(h) {
       // EventSource 는 끊기면 알아서 다시 붙는다.

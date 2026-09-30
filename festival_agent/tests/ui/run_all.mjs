@@ -220,8 +220,19 @@ try {
     const v = await launch("vite", process.execPath, (p) => [VITE, "--port", String(p), "--strictPort", "--host", "127.0.0.1"], vitePref, { cwd: WEB, env: viteEnv, logFile: true }, /Local:/, [webapi]);
     viteP = v.port;
   }
-  const prev = await pick(4174, [webapi, viteP]);
-  ports = { webapi, vite: viteP, preview: prev, moved: webapi !== webapiPref || viteP !== vitePref };
+  // 잠금 시험용 webapi (별도 포트 · 별도 DB 복사본): 틀린 코드를 5번 넘게 넣으면 그 서버가 10분간 잠기므로, 본 서버와 떼어 놓는다
+  let lockPort = null;
+  if (want("admin")) {
+    const DB2 = join(ROOT, "ui_lock.db");
+    const m2 = spawnSync(PY, [join(HERE, "make_mobile_db.py"), DB2], { cwd: APP, env: childEnv, encoding: "utf-8" });
+    if (m2.status === 0) {
+      const lk = await launch("webapi-lock", PY, (p) => ["webapi.py", "--port", String(p)], 8830, { cwd: APP, env: { ...apiEnv, DB_PATH: DB2 }, logFile: true }, /local 대역 · http/, [webapi, viteP]);
+      lockPort = lk.port;
+      childEnv.UI_LOCK_BASE = `http://127.0.0.1:${lockPort}`;
+    } else log("잠금 시험용 DB 복사본을 못 만들어 '잠김(서버)' 점검은 건너뜁니다");
+  }
+  const prev = await pick(4174, [webapi, viteP, lockPort ?? 0]);
+  ports = { webapi, vite: viteP, preview: prev, lock: lockPort, moved: webapi !== webapiPref || viteP !== vitePref };
   if (ports.moved) log(`기본 포트(${webapiPref}/${vitePref})를 다른 세션이 쓰고 있어 ${webapi}/${viteP} 로 옮겼습니다 (그 서버는 건드리지 않습니다)`);
   log(`서버 준비: webapi ${webapi} · vite ${viteP}`);
   const dev = `http://127.0.0.1:${viteP}`;
@@ -262,7 +273,7 @@ try {
 // ══ 정리 + 결과 ═══════════════════════════════════════════════════
 const stillUp = [];
 await cleanup();
-for (const [k, p] of Object.entries({ webapi: ports.webapi, vite: ports.vite, preview: ports.preview })) if (p && (await busy(p))) stillUp.push(`${k}:${p}`);
+for (const [k, p] of Object.entries({ webapi: ports.webapi, vite: ports.vite, preview: ports.preview, lock: ports.lock })) if (p && (await busy(p))) stillUp.push(`${k}:${p}`);
 const leftover = existsSync(ROOT);
 
 const cnt = (r, k) => r.lines.filter((l) => l.kind === k).length;
@@ -275,7 +286,7 @@ md += `**${F === 0 ? "전부 통과" : `실패 ${F}건`}** · 통과 ${P} · 실
 md += `\`node tests/ui/run_all.mjs\` 로 다시 돌립니다. 이 파일은 실행할 때마다 덮어씁니다.\n\n`;
 md += `## 환경\n\n`;
 md += `- DB: ${dbNote} — **운영 festival.db 는 읽기만 했습니다.**\n`;
-md += `- 포트: webapi ${ports.webapi} · vite(개발) ${ports.vite} · preview(빌드본) ${ports.preview}${ports.moved ? " — 기본 포트(8799·5174)를 다른 세션이 쓰고 있어 옮겼습니다" : ""}\n`;
+md += `- 포트: webapi ${ports.webapi} · vite(개발) ${ports.vite} · preview(빌드본) ${ports.preview}${ports.lock ? ` · 잠금 시험용 webapi ${ports.lock}(별도 DB — 본 서버는 잠그지 않음)` : ""}${ports.moved ? " — 기본 포트(8799·5174)를 다른 세션이 쓰고 있어 옮겼습니다" : ""}\n`;
 md += `- 기계 부하: 시작할 때 CPU 사용률 ${Math.round(BUSY * 100)}% → 기다리는 시간 ×${SLOW} (검사 기준은 그대로)\n`;
 md += `- 운영자 코드(D5-31): 이 실행에서만 쓰는 무작위 값을 테스트 webapi 에 환경변수로 넣었습니다 (운영 .env 는 쓰지 않았고, 값은 기록하지 않습니다).
 `;

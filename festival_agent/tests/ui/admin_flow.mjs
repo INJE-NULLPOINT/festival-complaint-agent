@@ -202,6 +202,16 @@ await go("control");
 const cardMode = await exists(".icards .icard");
 console.log(`· 관제 화면 모양: ${cardMode ? "조치할 일 카드 (D5-29)" : "옛 심각도 1위 카드"}`);
 check("관제: 화면이 그려지고 '실시간' 연결 표시", (await text("#live")).startsWith("실시간"), await text("#live"));
+{ // 헤더 배지 (D5-33): 데이터 · AI 해석 방식 · 합성 표시. 값은 서버(/api/control)가 준 것과 맞아야 한다.
+  const ctl = await get("/api/control");
+  const AI = { claude_code: "AI: Claude Code (개발용)", anthropic: "AI: Claude API", local: "AI: 규칙 대역" };
+  check("헤더: 데이터 배지에 '로컬 DB'", /로컬 DB/.test(await text("#live")), await text("#live"));
+  const ai = await until(async () => (await text("#chip-ai")) || null, 4000);
+  check("헤더: AI 배지가 서버 backend_llm 과 일치", ai === (AI[ctl.backend_llm] ?? `AI: ${ctl.backend_llm}`), `${ai} ← ${ctl.backend_llm}`);
+  const synVisible = await ev(`!document.getElementById("chip-syn").hidden`);
+  check("헤더: 합성 배지는 서버 synthetic.on 일 때만", synVisible === !!ctl.synthetic?.on, `화면 ${synVisible} · 서버 ${JSON.stringify(ctl.synthetic)}`);
+  if (ctl.synthetic?.on) check("헤더: 합성 배지에 건수", (await text("#chip-syn")).includes(`${ctl.synthetic.count}건`), await text("#chip-syn"));
+}
 check("관제: 브리핑 카드 (지금 조치할 일)", (await text(".brief .brief-text")).length > 5 || (await exists(".brief .muted")), (await text(".brief .brief-text")).slice(0, 30));
 const order = await ev(`(() => { const p = (s) => document.querySelector(s); const a = p(".brief"), h = p(".icards") || p(".hero"), g = p(".grid2");
   const before = (x, y) => !!x && !!y && !!(x.compareDocumentPosition(y) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -417,24 +427,58 @@ async function deleteFlow(area, selector) {
 await deleteFlow("유입", ".feed [data-del]");
 await deleteFlow("카드의 최신 민원", ".icard .ic-q [data-del]");
 
-// ══ F. 틀린 코드를 자꾸 넣으면 잠김 (D5-31) — 잠기면 이 테스트 서버의 관리자 동작이 10분간 전부 거부되므로 맨 마지막에 ═══
-if (probeAdmin.status === 401 && CODE) {
+// ══ F. 잠김 · 서버 미설정 (D5-31) — 테스트 서버를 실제로 잠그지 않는다 ═══════════════════
+// 틀린 코드를 5번 넘게 넣으면 그 서버의 관리자 동작이 10분간 전부 막힌다. 그 서버에서 나머지 점검이 이어지면 줄줄이 깨지므로,
+// ① 서버가 정말 잠기는지는 run_all 이 따로 띄운 '잠금 시험용 서버'(UI_LOCK_BASE)에서만 본다 — 본 서버는 잠기지 않는다.
+// ② 화면이 잠김·미설정을 어떻게 보여 주는지는 check_admin 응답을 브라우저에서 429·403 으로 바꿔치기해서 본다 (서버는 그대로).
+const LOCK_BASE = (process.env.UI_LOCK_BASE ?? "").replace(/\/$/, "");
+if (!LOCK_BASE) skip("잠김(서버)", "잠금 시험용 서버(UI_LOCK_BASE)가 없음 — run_all 이 따로 띄워 준다");
+else if (!CODE) bad("잠김(서버): 테스트용 코드(UI_ADMIN_CODE)가 없음");
+else {
+  const rpcLock = async (name, body, code) => {
+    const viaHeader = !!code && headerSafe(code);
+    const r = await fetch(`${LOCK_BASE}/api/rpc/${name}`, { method: "POST", headers: { "Content-Type": "application/json", ...(viaHeader ? { "X-Admin-Code": code } : {}) }, body: JSON.stringify(code && !viaHeader ? { ...body, p_code: code } : body) });
+    return { status: r.status, error: (await r.json().catch(() => ({}))).error };
+  };
+  const fails = [];
+  for (let i = 0; i < 6; i++) fails.push((await rpcLock("check_admin", {}, `wrong${i}`)).status);
+  check("잠김(서버): 틀린 코드를 5번 넘게 → 429", fails.slice(0, 5).every((x) => x === 401) && fails[5] === 429, fails.join(","));
+  check("잠김(서버): 잠긴 동안은 맞는 코드도 거부", (await rpcLock("check_admin", {}, CODE)).status === 429);
+  check("잠김(서버): 잠겨도 방문객 접수는 통과", (await rpcLock("submit_feedback", { p_zone_id: 1, p_text: "잠금 중에도 접수되는지 점검" }, null)).status === 200);
+  const main = await rpc("check_admin", {}, CODE);
+  check("잠김(서버): 잠금은 그 서버만 — 본 테스트 서버는 영향 없음", main.status === 200, `본 서버 status ${main.status}`);
+}
+
+// 화면: 서버를 잠그지 않고 check_admin 응답만 바꿔치기한다
+async function withFakeAdminReply(status, body, fn) {
+  await send("Fetch.enable", { patterns: [{ urlPattern: "*check_admin*" }] });
+  const onMsg = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.method === "Fetch.requestPaused") {
+      send("Fetch.fulfillRequest", { requestId: m.params.requestId, responseCode: status,
+        responseHeaders: [{ name: "Content-Type", value: "application/json; charset=utf-8" }],
+        body: Buffer.from(JSON.stringify(body)).toString("base64") });
+    }
+  };
+  ws.addEventListener("message", onMsg);
+  try { await fn(); } finally { ws.removeEventListener("message", onMsg); await send("Fetch.disable"); }
+}
+async function fakeReplyFlow(label, status, body, expectMsg, closeButtonText) {
   await go("control");
   await ev(`sessionStorage.clear()`);
-  const fails = [];
-  for (let i = 0; i < 6; i++) fails.push((await rpc("check_admin", {}, `wrong${i}`)).status);
-  check("잠김(서버): 틀린 코드를 5번 넘게 → 429", fails.includes(429), fails.join(","));
-  const okWhileLocked = await rpc("check_admin", {}, CODE);
-  check("잠김(서버): 잠긴 동안은 맞는 코드도 거부", okWhileLocked.status === 429, `status ${okWhileLocked.status}`);
-  check("잠김(서버): 방문객 접수는 잠겨도 통과", (await rpc("submit_feedback", { p_zone_id: 1, p_text: "잠금 중에도 접수되는지 점검" }, null)).status === 200);
-  if (await exists(".feed [data-del]")) {
+  if (!(await exists(".feed [data-del]"))) return skip(`${label}(화면)`, "화면에 [민원 지우기] 버튼이 없음");
+  const total0 = (await get("/api/control")).total;
+  await withFakeAdminReply(status, body, async () => {
     await click(".feed [data-del]"); await until(() => exists(".adm-overlay"), 3000);
-    await ev(`(() => { document.getElementById("adm-code").value = ${JSON.stringify(CODE)}; })()`); await click(".adm-ok");
-    check("잠김(화면): '잠시 후 다시 시도' 안내 · 입력 막힘", !!(await until(() => ev(`/잠시 후/.test(document.querySelector(".adm-err")?.textContent ?? "") && document.getElementById("adm-code").disabled`), 4000)), await text(".adm-err"));
-    await click(".adm-ok");        // 잠김 안내 창은 [닫기] 로 닫힌다
-    check("잠김(화면): 닫으면 창이 사라지고 안내 토스트", !!(await until(async () => !(await exists(".adm-overlay")) && (await ev(`/시도가 너무 많/.test(document.getElementById("toasts").textContent)`)), 3000)));
-  } else skip("잠김(화면)", "화면에 [민원 지우기] 버튼이 없음");
+    await ev(`(() => { document.getElementById("adm-code").value = ${JSON.stringify(CODE || "x")}; })()`); await click(".adm-ok");
+    check(`${label}(화면): 안내 문구 · 입력 막힘 · 버튼이 [${closeButtonText}]`, !!(await until(() => ev(`${expectMsg}.test(document.querySelector(".adm-err")?.textContent ?? "") && document.getElementById("adm-code").disabled && document.querySelector(".adm-ok").textContent.trim() === ${JSON.stringify(closeButtonText)}`), 4000)), await text(".adm-err"));
+    await click(".adm-ok");
+  });
+  check(`${label}(화면): 닫으면 창이 사라짐`, !!(await until(async () => !(await exists(".adm-overlay")), 3000)));
+  check(`${label}(화면): 지워지지 않고 코드도 저장되지 않음`, (await get("/api/control")).total === total0 && !(await ev(`Object.keys(sessionStorage).length > 0`)), `총 ${total0}`);
 }
+await fakeReplyFlow("잠김", 429, { error: "시도가 너무 많습니다. 10분 뒤에 다시 시도하세요" }, "/잠시 후/", "닫기");
+await fakeReplyFlow("서버 미설정", 403, { error: "운영자 코드가 필요합니다" }, "/설정되지 않았/", "닫기");
 
 console.log(`\n통과 ${passed} · 실패 ${failed} · 건너뜀 ${skipped}`);
 console.log(failed ? "실패 있음" : "전부 통과");

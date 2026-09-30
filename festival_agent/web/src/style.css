@@ -108,7 +108,10 @@ button { font: inherit; }
   padding: 8px 16px; border-radius: 8px; color: var(--muted); text-decoration: none; font-weight: 700;
 }
 .tabs a.on { background: var(--accent); color: var(--accent-ink); }
-body.visitor .tabs, body.visitor .live { display: none; }
+.chip { font-size: 13px; padding: 3px 10px; border-radius: 99px; background: var(--line); color: var(--muted); white-space: nowrap; }
+.chip.warn { background: var(--b-mid); color: var(--badge-mid-ink); font-weight: 700; }
+.chip[hidden] { display: none; }
+body.visitor .tabs, body.visitor .live, body.visitor .chip { display: none; }
 
 /* minmax(0,1fr): 한 줄로 접은 알림처럼 줄바꿈 없는 내용이 화면 폭을 밀어내지 않게 */
 main { max-width: 1120px; margin: 0 auto; padding: 20px 16px 40px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
@@ -286,6 +289,7 @@ textarea { resize: vertical; }
 
 @media (max-width: 480px) {
   .top { flex-wrap: wrap; }
+  .brand { flex-wrap: wrap; row-gap: 6px; }
   main { padding: 14px 12px 32px; gap: 12px; }
   .card { padding: 16px; }
   .brief-text { font-size: 18px; }
@@ -339,6 +343,8 @@ body:not(.visitor) .dot { border-radius: 2px; background: var(--text); }
 body:not(.visitor) .brand strong { font-weight: 800; }
 body:not(.visitor) .live { border-radius: 0; background: none; border: 1px solid var(--line); }
 body:not(.visitor) .live.ok { background: none; color: var(--text); border-color: var(--text); }
+body:not(.visitor) .chip { border-radius: 0; background: none; border: 1px solid var(--line); }
+body:not(.visitor) .chip.warn { background: var(--b-mid); color: var(--badge-mid-ink); border-color: var(--text); }
 body:not(.visitor) .tabs a { border-radius: 0; color: var(--muted); }
 body:not(.visitor) .tabs a.on { background: var(--text); color: var(--bg); }
 
@@ -596,7 +602,7 @@ body.visitor #app.enter > .rp { animation: fade-in .22s ease-out backwards; }
 .bar i { transition: width .24s ease-out; }
 
 /* 사용자가 펼칠 때만 */
-.rank li.pop .formula-box, #hero-formula-box.pop, .docs li.pop .pv, .alert.pop .alert-text, .feed li.pop .feed-text, .icard.pop .ic-body, .ic-fx.pop,
+.rank li.pop .formula-box, #hero-formula-box.pop, .docs li.pop .pv, .alert.pop .alert-text, .feed li.pop .feed-text, .icard.pop .ic-body, .ic-fx.pop, .rvp.pop,
 .rp details[open] > p { animation: rise .2s ease-out; }
 
 /* 버튼 눌림 */
@@ -714,6 +720,27 @@ body.visitor #app.enter > .rp { animation: fade-in .22s ease-out backwards; }
 .toast-act { pointer-events: auto; min-height: 44px; padding: 0 10px; background: none; border: 0; color: inherit; font: inherit; font-weight: 800; text-decoration: underline; cursor: pointer; }
 
 .rcpt { padding: 0 6px; border: 1px solid var(--line); font-size: 13px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }   /* 방문객 접수번호 W-n */
+
+/* ── 확인 필요 처리 패널 (D5-32) — 유입 카드 안. 안전 의심이 먼저, 행마다 [유형 지정 ▾] [유형 없음으로 닫기] [지우기] ── */
+button.rv { font: inherit; background: none; cursor: pointer; min-height: 44px; }
+button.rv.open { box-shadow: inset 0 0 0 1px var(--text); }
+.rvp { margin: 8px 0 14px; border: 1px solid var(--text); background: var(--surface); }
+.rvp-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.rvp-t { margin: 0; }
+.rvlist { list-style: none; margin: 0; padding: 0; }
+.rvi { padding: 12px 14px; border-top: 1px solid var(--line); }
+.rvi:first-child { border-top: 0; }
+.rvi.safe { border-left: 4px solid var(--text); }
+.rvi-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 14px; color: var(--muted); }
+.rvi-text { margin: 6px 0; font-size: 16px; line-height: 1.5; }
+.rvi-sug { margin: 0 0 10px; font-size: 14px; }
+.rvi-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 유형 지정: 버튼 모양 위에 투명한 select 를 덮어 폰에서는 기본 선택창이 열린다 */
+.rvi-pick { position: relative; overflow: hidden; cursor: pointer; }
+.rvi-pick select { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 16px; }
+.rvi-pick:focus-within { outline: 3px solid var(--accent); outline-offset: 2px; }
+.rvp-empty, .rvp-more { margin: 0; padding: 12px 14px; }
+.tag.none { padding: 0 6px; border: 1px dashed var(--muted); color: var(--muted); font-weight: 600; }   /* 유형 없음으로 닫은 민원 */
 
 /* 움직임 줄이기: 모션 전부 끔 (스크립트 모션은 ui.ts reduced() 가 건너뜀) */
 @media (prefers-reduced-motion: reduce) {
