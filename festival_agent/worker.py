@@ -115,6 +115,7 @@ def doc_loop(window: int, interval: float) -> None:
 
 
 ISSUE_INTERVAL = 5.0
+PURGE_INTERVAL = 600.0          # 출처 해시(submit_rate)·운영자 코드 실패 기록은 접수·실패가 없어도 10분마다 지운다
 
 
 def issue_loop(window: int) -> None:
@@ -123,9 +124,15 @@ def issue_loop(window: int) -> None:
     조치 상태를 사람이 바꾸거나 시간이 흘러 '최근' 값이 바뀌는 것도 여기서 따라간다.
     값이 그대로면 쓰지 않으므로 화면이 매번 다시 그려지지 않는다.
     """
+    last_purge = [0.0]
+
     def tick(w: int) -> None:
         issues.refresh(w)
         review.raise_stale_alerts()        # 안전 의심 확인 필요가 15분 넘게 방치되면 알림 1회 (시간 기반이라 여기서)
+        if time.time() - last_purge[0] >= PURGE_INTERVAL:      # 24시간 지난 출처 해시·실패 기록 정리 (D5-33)
+            last_purge[0] = time.time()
+            from core import intake
+            intake.purge_old()
     _loop(tick, ISSUE_INTERVAL, window)
 
 

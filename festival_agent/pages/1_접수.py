@@ -34,8 +34,7 @@ if submitted:
         st.error(privacy.NEED_MORE)
     else:
         zone_id = next(z["id"] for z in zones if z["name"] == zone_name)
-        merged = intake.find_duplicate(zone_id, text)        # 2분 안의 같은 글은 조용히 합친다 (D5-33 ①)
-        fid = merged if merged is not None else db.insert_feedback(zone_id, text, source="qr")
+        fid = intake.accept(zone_id, text, via_inbox=False)   # 웹과 같은 규칙: 2분 안의 같은 글은 조용히 합친다 (D5-33)
         if fid is None:
             st.info("이미 접수된 내용입니다.")
         else:

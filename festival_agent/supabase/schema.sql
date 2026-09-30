@@ -197,7 +197,11 @@ create table if not exists doc_job (
 create index if not exists idx_cls_status on classification(status);
 create index if not exists idx_fb_ingested on feedback(ingested_at);
 alter table feedback add column if not exists deleted_at text;   -- NULL = 살아 있음, 값 = 운영자가 지움(숨김)
-alter table feedback add column if not exists dup_count integer default 0;   -- 같은 글을 2분 안에 또 보내 합쳐진 횟수 (D5-33 ①)
+alter table feedback add column if not exists dup_count integer default 0;
+-- 조회 속도 (D5-37)
+create index if not exists idx_fb_posted on feedback(posted_at);
+create index if not exists idx_fb_src_posted on feedback(source, posted_at);
+create index if not exists idx_fb_deleted on feedback(deleted_at);   -- 같은 글을 2분 안에 또 보내 합쳐진 횟수 (D5-33 ①)
 create index if not exists idx_sev_asof on severity(as_of);
 
 -- ── RLS ────────────────────────────────────────────────────────────
@@ -242,7 +246,9 @@ declare
   v_now timestamp := now() at time zone 'Asia/Seoul';
   -- D5-33 설계값 [확인 필요: 리허설로 조정]. 끄려면 false 로.
   v_dedup_on constant boolean := true;
-  v_limit_on constant boolean := true;
+  -- ②출처별 제한은 **기본 꺼짐**. x-forwarded-for 맨 오른쪽 값이 게이트웨이 주소면 모두가 한 출처로 묶여 정상 신고가 막힌다.
+  -- [확인 필요] Supabase 에서 헤더가 실제 접속자 주소인지 확인한 뒤에만 true 로 켠다.
+  v_limit_on constant boolean := false;
 begin
   -- 한글·영문·숫자가 2개 이상이어야 한다 ('...' 'ㅋㅋ' '!!!!' 거부). core/privacy.has_content 와 같은 규칙
   if p_text is null or length(regexp_replace(p_text, '[^가-힣A-Za-z0-9]', '', 'g')) < 2 then
@@ -270,6 +276,8 @@ begin
   -- (워커가 옮긴 뒤에는 마스킹본과 비교하므로 개인정보가 섞인 글은 합쳐지지 않을 수 있다 — [확인 필요])
   if v_dedup_on then
     v_norm := lower(regexp_replace(p_text, '[^가-힣A-Za-z0-9]', '', 'g'));
+    -- 같은 구역·같은 글이 거의 동시에 두 번 와도 한 건이 되게, 이 트랜잭션이 끝날 때까지 같은 글끼리는 줄을 세운다
+    perform pg_advisory_xact_lock(hashtext(p_zone_id::text || ':' || v_norm));
     v_cut := to_char(v_now - interval '120 seconds', 'YYYY-MM-DD"T"HH24:MI:SS');
     select id into v_id from feedback_inbox
      where zone_id = p_zone_id and text is not null and created_at >= v_cut
@@ -329,7 +337,10 @@ begin
     return '';
   end if;
   select code_hash into v_key from operator_secret where id = 1;
-  return left(encode(hmac(v_ip, coalesce(v_key, 'nokey') || to_char(current_date, 'YYYY-MM-DD'), 'sha256'), 'hex'), 16);
+  if v_key is null then
+    return '';                                   -- 비밀값이 없으면 출처를 구분하지 않는다 (고정 문자열 키는 쓰지 않는다)
+  end if;
+  return left(encode(hmac(v_ip, v_key || to_char(current_date, 'YYYY-MM-DD'), 'sha256'), 'hex'), 16);
 end $$;
 
 -- 코드 검사 (내부용). 통과하면 null, 아니면 거부 사유를 돌려준다. anon 이 직접 부를 수 없다.

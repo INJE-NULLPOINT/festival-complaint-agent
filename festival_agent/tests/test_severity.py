@@ -1507,6 +1507,53 @@ def test_도배방지_같은글_합치기_출처별_제한_구역몰림_표시()
         assert [(r["label"], r["score"]) for r in db.ranked()] == before
 
 
+def test_도배방지_동시접수_합치기_정리_스트림릿도_같은규칙():
+    import threading
+    from datetime import timedelta
+
+    from core import admin, intake, source_id
+    with _temp_db() as db:
+        # 같은 글이 거의 동시에 8번 와도 한 건 (찾기→넣기가 한 덩어리)
+        ids = []
+        gate = threading.Barrier(8)
+
+        def go():
+            gate.wait()
+            ids.append(intake.accept(1, "유등터널 입구가 너무 붐벼서 밀려요 동시에"))
+        ths = [threading.Thread(target=go) for _ in range(8)]
+        [th.start() for th in ths]
+        [th.join() for th in ths]
+        with db.connect() as conn:
+            rows = [tuple(r) for r in conn.execute("SELECT id, dup_count FROM feedback_inbox")]
+        assert len(rows) == 1 and rows[0][1] == 7 and set(ids) == {rows[0][0]}
+        # Streamlit 접수(via_inbox=False)도 같은 규칙 — 2분 안 같은 글은 같은 민원 번호, 마스킹은 그대로
+        s1 = intake.accept(2, "연락은 010-1234-5678 로 주세요 화장실이 더러워요", via_inbox=False)
+        s2 = intake.accept(2, "연락은 010-1234-5678 로 주세요  화장실이 더러워요!!", via_inbox=False)
+        assert s1 is not None and s1 == s2
+        with db.connect() as conn:
+            r = conn.execute("SELECT raw_text, dup_count FROM feedback WHERE id=?", (s1,)).fetchone()
+        assert "010-1234-5678" not in r["raw_text"] and r["dup_count"] == 1
+        # 정리: 24시간 지난 출처 기록·운영자 코드 실패 기록을 접수·실패가 없어도 지울 수 있다
+        old = (intake.seoul_now() - timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%S")
+        with db.connect() as conn:
+            conn.execute("INSERT INTO submit_rate (src, at) VALUES ('x', ?)", (old,))
+            conn.execute("INSERT INTO submit_rate (src, at) VALUES ('y', ?)", (intake._stamp(intake.seoul_now()),))
+            conn.execute("INSERT INTO admin_attempt (at, src) VALUES (?, 'x')", (old,))
+            conn.commit()
+        assert intake.purge_old() == 2
+        with db.connect() as conn:
+            assert [r["src"] for r in conn.execute("SELECT src FROM submit_rate")] == ["y"]
+            assert conn.execute("SELECT COUNT(*) c FROM admin_attempt").fetchone()["c"] == 0
+        # 출처 해시 비밀값은 프로세스가 무작위로 만든다 (고정 문자열 아님) — 날짜가 바뀌면 같은 주소도 다른 해시
+        h = source_id.source_hash("203.0.113.7")
+        source_id._keys.clear()
+        assert source_id.source_hash("203.0.113.7") != h
+    # SQL 쪽: 출처별 제한은 기본 꺼짐, 비밀값이 없으면 고정 키를 쓰지 않는다
+    sql = (Path(__file__).resolve().parent.parent / "supabase" / "schema.sql").read_text(encoding="utf-8")
+    assert "v_limit_on constant boolean := false" in sql and "nokey" not in sql
+    assert "pg_advisory_xact_lock" in sql
+
+
 def test_운영자코드_미설정이면_관리자_동작은_전부_거부():
     from core import admin
     import webapi

@@ -388,12 +388,22 @@ def _migrate_sqlite(conn) -> None:
             conn.execute(f"ALTER TABLE agent_log ADD COLUMN {col} INTEGER DEFAULT 0")
 
 
+# feedback 조회 속도용 인덱스 (D5-37: 10,000건 기준 control 응답 50ms → 36ms). 열이 생긴 뒤(마이그레이션 뒤)에 만든다.
+INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_fb_posted ON feedback(posted_at)",
+    "CREATE INDEX IF NOT EXISTS idx_fb_src_posted ON feedback(source, posted_at)",
+    "CREATE INDEX IF NOT EXISTS idx_fb_deleted ON feedback(deleted_at)",
+)
+
+
 def init_db() -> None:
     """스키마 생성 + 시드 투입. 몇 번 실행해도 안전하다."""
     with connect() as conn:
         conn.executescript(SCHEMA)
         if not is_pg():
             _migrate_sqlite(conn)
+        for sql in INDEX_SQL:               # 기존 DB 에도 자동으로 만들어진다
+            conn.execute(sql)
 
         row = conn.execute("SELECT id FROM festival LIMIT 1").fetchone()
         if row is None:

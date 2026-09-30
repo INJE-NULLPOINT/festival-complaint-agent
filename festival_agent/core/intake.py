@@ -18,12 +18,16 @@
 Supabase 는 schema.sql 의 submit_feedback 이 같은 규칙을 한다 (② 는 x-forwarded-for 헤더가 와야 한다 — [확인 필요]).
 """
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 
 from . import config, db, privacy
 
 KST = timezone(timedelta(hours=9))
 MSG_RATE = "잠시 후 다시 보내 주세요"          # 한도 숫자·기준은 알려 주지 않는다
+
+
+_submit_lock = threading.Lock()       # 같은 글이 거의 동시에 두 번 와도 한 건으로 합치려면 '찾기 → 넣기'가 한 덩어리여야 한다
 
 
 class RateLimited(Exception):
@@ -88,6 +92,38 @@ def check_rate(src: str | None, now: datetime | None = None) -> None:
                 raise RateLimited(MSG_RATE)
         conn.execute("INSERT INTO submit_rate (src, at) VALUES (?, ?)", (src, _stamp(now)))
         conn.commit()
+
+
+def accept(zone_id, text: str, source: str | None = None, via_inbox: bool = True) -> int | None:
+    """접수 한 건을 받는다 — ②출처별 제한 → ①같은 글 합치기 → 저장을 한 덩어리로(프로세스 안에서 락).
+
+    via_inbox=True  웹 접수: feedback_inbox 에 넣고 접수번호(inbox id)를 돌려준다 (워커가 마스킹해 옮긴다).
+    via_inbox=False Streamlit 접수: db.insert_feedback 으로 바로 넣고 민원 번호를 돌려준다 (마스킹은 그 안에서).
+    합쳐진 글은 같은 번호를 돌려준다(성공처럼). 제한에 걸리면 RateLimited. 같은 해시 글이라 저장이 거절되면 None.
+    Supabase 는 submit_feedback 이 pg_advisory_xact_lock 으로 같은 일을 한다.
+    """
+    with _submit_lock:
+        check_rate(source)
+        dup = find_duplicate(zone_id, text)
+        if dup is not None:
+            return dup
+        if not via_inbox:
+            return db.insert_feedback(zone_id, text, source="qr")
+        with db.connect() as conn:
+            cur = conn.execute("INSERT INTO feedback_inbox (zone_id, text, created_at) VALUES (?,?,?)",
+                               (zone_id, text.strip(" "), _stamp(seoul_now())))
+            conn.commit()
+            return cur.lastrowid
+
+
+def purge_old(now: datetime | None = None) -> int:
+    """24시간 지난 출처 기록(submit_rate)과 운영자 코드 실패 기록(admin_attempt)을 지운다. 워커가 주기적으로 부른다."""
+    cutoff = _stamp((now or seoul_now()) - timedelta(hours=24))
+    with db.connect() as conn:
+        n = conn.execute("DELETE FROM submit_rate WHERE at < ?", (cutoff,)).rowcount
+        n += conn.execute("DELETE FROM admin_attempt WHERE at < ?", (cutoff,)).rowcount
+        conn.commit()
+    return n
 
 
 def zone_burst(window_sec: int | None = None, min_count: int | None = None, now: datetime | None = None) -> list[dict]:
