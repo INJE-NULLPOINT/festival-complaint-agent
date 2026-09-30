@@ -1405,6 +1405,25 @@ def test_운영자코드_잠금은_출처별_다른_출처_운영자는_통과()
             srv.shutdown()
 
 
+def test_지운_민원_목록_최신순_되돌리면_빠진다():
+    from datetime import datetime, timedelta
+    with _temp_db() as db:
+        ids = _seed(db, [(1, "restroom", 9, -0.5, False, "화장실 줄이 너무 길어요"),
+                         (None, "price", 6, -0.5, False, "어묵이 너무 비싸요"),
+                         (3, "guide", 3, -0.5, False, "표지판이 없어서 헤맸어요")])
+        assert db.list_deleted() == []
+        base = datetime.now().replace(microsecond=0)
+        db.set_feedback_deleted(ids[0], True, (base - timedelta(minutes=2)).isoformat())
+        db.set_feedback_deleted(ids[1], True, base.isoformat())
+        rows = db.list_deleted()
+        assert [r["id"] for r in rows] == [ids[1], ids[0]]                      # 지운 시각 최신순
+        assert rows[0]["zone"] == config.ZONE_UNKNOWN and rows[0]["label"] == "price" and rows[0]["status"] == "done"
+        assert rows[1]["raw_text"] == "화장실 줄이 너무 길어요" and rows[1]["deleted_at"]
+        assert len(db.list_deleted(limit=1)) == 1
+        db.set_feedback_deleted(ids[1], False)                                   # 되돌리면 목록에서 빠진다
+        assert [r["id"] for r in db.list_deleted()] == [ids[0]]
+
+
 def test_운영자코드_미설정이면_관리자_동작은_전부_거부():
     from core import admin
     import webapi

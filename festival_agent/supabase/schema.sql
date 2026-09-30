@@ -393,6 +393,30 @@ begin
   return jsonb_build_object('ok', true);
 end $$;
 
+-- 최근에 지운 민원 50건 (D5-42) — 되돌리기용 목록. 운영자 코드가 필요하다. db.list_deleted 와 같은 내용.
+create or replace function list_deleted(p_code text)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_err text;
+  v_items jsonb;
+begin
+  v_err := admin_gate(p_code);
+  if v_err is not null then
+    return jsonb_build_object('ok', false, 'error', v_err);
+  end if;
+  select coalesce(jsonb_agg(x order by x.deleted_at desc, x.id desc), '[]'::jsonb) into v_items
+    from (select f.id, f.raw_text, coalesce(z.name, '구역 미상') as zone, f.zone_id, f.posted_at, f.deleted_at,
+                 c.label, c.status
+            from feedback f
+            left join zone z on z.id = f.zone_id
+            left join classification c on c.feedback_id = f.id
+           where f.deleted_at is not null
+           order by f.deleted_at desc, f.id desc
+           limit 50) x;
+  return jsonb_build_object('ok', true, 'items', v_items);
+end $$;
+
 -- ── 확인 필요(review) 처리 (D5-32) — 운영자 코드 필요, 상태 조건을 건다 ──────────
 -- 유형 지정: status='review' → 'done'. 안전·혼잡이면 안전 의심 자동, 긍정은 안전 아님, 그 밖엔 p_is_safety(없으면 모델 값).
 -- 같은 문장이 다시 오면 쓰도록 classify_cache 에도 넣는다 (Python 의 sha256(raw_text) 와 같은 해시).
@@ -505,6 +529,7 @@ revoke all on function request_doc(text, text) from public;
 revoke all on function set_action_status(bigint, text, text) from public;
 revoke all on function delete_feedback(bigint, text) from public;
 revoke all on function restore_feedback(bigint, text) from public;
+revoke all on function list_deleted(text) from public;
 revoke all on function resolve_review(bigint, text, boolean, text) from public;
 revoke all on function dismiss_review(bigint, text) from public;
 revoke all on function reopen_review(bigint, text) from public;
@@ -515,6 +540,7 @@ grant execute on function request_doc(text, text) to anon, authenticated;
 grant execute on function set_action_status(bigint, text, text) to anon, authenticated;
 grant execute on function delete_feedback(bigint, text) to anon, authenticated;
 grant execute on function restore_feedback(bigint, text) to anon, authenticated;
+grant execute on function list_deleted(text) to anon, authenticated;
 grant execute on function resolve_review(bigint, text, boolean, text) to anon, authenticated;
 grant execute on function dismiss_review(bigint, text) to anon, authenticated;
 grant execute on function reopen_review(bigint, text) to anon, authenticated;

@@ -179,6 +179,25 @@ def deleted_count() -> int:
             "SELECT COUNT(*) c FROM feedback WHERE deleted_at IS NOT NULL").fetchone()["c"]
 
 
+def list_deleted(limit: int = 50) -> list[dict]:
+    """최근에 지운(숨긴) 민원 — 운영자가 되돌릴 수 있게 보여 주는 목록 (D5-42). 지운 시각 최신순.
+
+    원문은 접수 때 이미 마스킹된 것이다. 분류 상태·유형도 함께 준다(분류 전이면 None).
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            f"""SELECT f.id, f.raw_text, COALESCE(z.name, '{config.ZONE_UNKNOWN}') zone, f.zone_id,
+                       f.posted_at, f.deleted_at, c.label, c.status
+                FROM feedback f
+                LEFT JOIN zone z ON z.id = f.zone_id
+                LEFT JOIN classification c ON c.feedback_id = f.id
+                WHERE f.deleted_at IS NOT NULL
+                ORDER BY f.deleted_at DESC, f.id DESC LIMIT ?""",
+            (max(1, min(int(limit), 200)),),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def is_pg() -> bool:
     return bool(config.SUPABASE_DB_URL)
 
