@@ -1025,21 +1025,6 @@ def test_확인필요_처리_RPC도_운영자코드가_필요하다():
         assert _cls(db, fid)["status"] == "dismissed"
 
 
-def test_확인필요_예전_review_의_모델제안을_열로_옮긴다():
-    """suggested_label 열이 생기기 전에 review 가 된 건은 agent_note 의 '모델 제안'에서 한 번만 채운다."""
-    import re
-    with _temp_db() as db:
-        fid = db.insert_feedback(4, "오래된 확인 필요 민원입니다", source="test")
-        with db.connect() as conn:
-            conn.execute("UPDATE classification SET status='review', is_safety=1, agent_note=? WHERE feedback_id=?",
-                         ("확인 필요 — 신뢰도 0.20 < 0.3. 모델 제안: safety · 근거 약함", fid))
-            for col in ("suggested_label", "reviewed_at", "review_action", "decided_by"):
-                conn.execute(f"ALTER TABLE classification DROP COLUMN {col}")
-            conn.commit()
-        db.init_db()                                                   # 마이그레이션이 열을 붙이고 채운다
-        assert _cls(db, fid)["suggested_label"] == "safety"
-
-
 def test_관제_헤더용_필드_backend_llm_synthetic():
     import os
 
@@ -1581,6 +1566,209 @@ def test_공격점검_탐지와_카드_판정_기준():
     assert not m.judge_cards(meta, bad_fac)[3][1]
     # 탐지 밖 공격(3번)은 인용돼도 ①은 통과 — 조치 문구(②~④)가 깨끗한지로 본다
     assert m.judge_cards(meta, [card("shuttle:8", 0, "셔틀이 없다", [("배차 간격을 줄인다", 3)], [3])])[0][1]
+
+
+def _with_local_backend():
+    """LLM_BACKEND=local 로 돌리고 끝나면 되돌리는 컨텍스트 (감시·조치·통합 대역 테스트용)."""
+    import contextlib
+    import os
+
+    @contextlib.contextmanager
+    def cm():
+        old = os.environ.get("LLM_BACKEND")
+        os.environ["LLM_BACKEND"] = "local"
+        try:
+            yield
+        finally:
+            if old is None:
+                os.environ.pop("LLM_BACKEND", None)
+            else:
+                os.environ["LLM_BACKEND"] = old
+    return cm()
+
+
+def test_감시_알림_조건_중복_억제_한가한창_경계():
+    """②감시(local 대역): 즉시 등급·급증일 때만 알림, 같은 알림은 10분 안에 한 번, 한가한 창의 1~2건은 알림 없음."""
+    from agents import monitor
+    with _temp_db() as db, _with_local_backend():
+        def alerts():
+            with db.connect() as conn:
+                return [(r["label"], r["kind"]) for r in conn.execute("SELECT label, kind FROM alert ORDER BY id")]
+        # 한가한 창: 비안전 1건 → 알림 0 (B-01: 창 안 10건 미만이면 빈도비 하한이 걸려 점수가 부풀지 않는다)
+        _seed(db, [(1, "restroom", 5, -0.9, False, "화장실 휴지가 없어요")])
+        monitor.run_once(60)
+        assert alerts() == []
+        # 안전 1건 → B-04 로 high 등급(알림 조건인 immediate 아님) → 알림 0 (등급은 올라가지만 즉시 알림은 3건부터)
+        _seed(db, [(2, "safety", 4, -0.8, True, "계단 난간이 흔들려요")])
+        assert [r["grade"] for r in db.ranked(60) if r["label"] == "safety"] == ["high"]
+        monitor.run_once(60)
+        assert alerts() == []
+        # 안전 3건 → S-04 immediate → safety_threshold 알림 1건
+        _seed(db, [(2, "safety", 3, -0.8, True, "바닥이 미끄러워서 넘어졌어요"),
+                   (3, "safety", 2, -0.8, True, "조명이 꺼져서 어두워요")])
+        monitor.run_once(60)
+        assert alerts() == [("safety", "safety_threshold")]
+        # 같은 상태가 이어져도(다음 주기) 중복 알림 없음
+        monitor.run_once(60)
+        monitor.run_once(60)
+        assert alerts() == [("safety", "safety_threshold")]
+        with db.connect() as conn:                                       # 10분이 지나면 같은 알림을 다시 올릴 수 있다
+            conn.execute("UPDATE alert SET created_at='2000-01-01T00:00:00'")
+            conn.commit()
+        monitor.run_once(60)
+        assert len(alerts()) == 2
+
+
+def test_감시_급증_알림_최소건수_B02와_끝난_급증은_알림없음():
+    from agents import monitor
+    from core import config, severity
+    with _temp_db() as db, _with_local_backend():
+        def alerts():
+            with db.connect() as conn:
+                return [(r["label"], r["kind"]) for r in conn.execute("SELECT label, kind FROM alert ORDER BY id")]
+        # 바탕(주차 3건 + 다른 유형 7건으로 창 10건 이상) 위에 최근 5분에 주차가 몰림 → 급증. (B-02: 최근 3건 이상일 때만)
+        base = [(1, "parking", 55 - 12 * i, -0.3, False, f"주차장이 붐벼요 {i}번째 바탕 민원") for i in range(3)]
+        fill = [(2, "price", 50 - 8 * i, -0.3, False, f"가격이 비싸요 {i}번째 채움 민원") for i in range(7)]
+        recent = [(1, "parking", 4 - i, -0.3, False, f"주차 대기 줄이 길어요 {i}번째 몰림") for i in range(3)]
+        _seed(db, base + fill + recent[:2])                                # 최근 2건 — 급증 아님
+        spike = [r for r in db.ranked(60) if r["label"] == "parking"][0]["spike"]
+        assert not spike["spiked"]
+        monitor.run_once(60)
+        assert alerts() == []
+        _seed(db, recent[2:])                                              # 최근 3건 — 급증
+        assert [r for r in db.ranked(60) if r["label"] == "parking"][0]["spike"]["spiked"]
+        monitor.run_once(60)
+        assert alerts() == [("parking", "spike")]
+        monitor.run_once(60)
+        assert alerts() == [("parking", "spike")]                          # 중복 없음
+    with _temp_db() as db, _with_local_backend():
+        # 급증이 끝난 뒤(최근 구간에 새 유입 없음)에는 새 알림이 없다
+        _seed(db, [(1, "parking", 55 - 6 * i, -0.3, False, f"주차장이 붐벼요 {i}번째 예전 민원") for i in range(4)]
+              + [(2, "price", 50 - 6 * i, -0.3, False, f"가격이 비싸요 {i}번째 채움 민원") for i in range(6)]
+              + [(3, "restroom", 0, -0.3, False, "화장실 줄이 길어요 지금")])
+        assert not [r for r in db.ranked(60) if r["label"] == "parking"][0]["spike"]["spiked"]
+        monitor.run_once(60)
+        assert [a for a in alerts() if a[0] == "parking"] == []
+
+
+def test_조치요청서_내용_인용_건수_부서_연락처_카드조치():
+    """③ local 대역으로 만든 요청서(DOCX·doc_json)가 관제와 같은 값을 담고, 지운·확인 필요 민원은 인용하지 않는다."""
+    import json
+    import tempfile
+
+    from docx import Document
+
+    from agents import dispatcher, supervisor
+    from core import config, issues
+    with _temp_db() as db, _with_local_backend():
+        ids = _seed(db, [(4, "crowd", 12 - i, -0.8, True, f"유등터널 입구에 사람이 몰려 밀려요 {i}번째 불편") for i in range(6)])
+        gone = _seed(db, [(4, "crowd", 1, -0.8, True, "지운 민원입니다 이 글은 인용되면 안 돼요")])[0]
+        rv = db.insert_feedback(4, "확인 필요 민원입니다 이 글도 인용되면 안 돼요", source="test")
+        with db.connect() as conn:
+            conn.execute("UPDATE classification SET status='review', is_safety=1, confidence=0.1 WHERE feedback_id=?", (rv,))
+            conn.commit()
+        db.set_feedback_deleted(gone, True)
+        supervisor.run_once(60)                                              # 관제 카드(local 문구)를 만든다
+        entry = [r for r in db.ranked(60) if r["label"] == "crowd"][0]
+        card_actions = issues.actions_for_label("crowd")
+        assert card_actions                                                  # 카드 조치가 요청서로 넘어간다
+        out = Path(tempfile.mkdtemp())
+        old_out, dispatcher.OUT_DIR = dispatcher.OUT_DIR, out
+        try:
+            dispatcher.run_for("crowd", entry["score"], entry["grade"], entry["formula"], 60)
+        finally:
+            dispatcher.OUT_DIR = old_out
+        with db.connect() as conn:
+            row = conn.execute("SELECT * FROM action_request WHERE label='crowd' ORDER BY id DESC LIMIT 1").fetchone()
+            raw = {r["raw_text"] for r in conn.execute("SELECT raw_text FROM feedback WHERE id IN (%s)" % ",".join(map(str, ids)))}
+        doc = json.loads(row["doc_json"])
+        dept, contact = config.DEPARTMENT_MAP["crowd"]
+        assert doc["department"] == dept and doc["contact"] == contact == "055-000-0005"
+        assert row["department"] == dept and row["status"] == "requested"
+        # 건수·점수·계산식이 같은 창(60분)의 관제 값과 같다 (지운·확인 필요 제외)
+        assert doc["count"] == row["count"] == db.label_counts(60)["crowd"] == len(ids)
+        assert doc["score"] == entry["score"] and doc["formula"] == entry["formula"] and doc["grade"] == entry["grade"]
+        # 인용 5건은 DB 원문(마스킹본)과 글자까지 같고, 지운 민원·확인 필요 민원은 없다
+        assert len(doc["quotes"]) == 5 and all(q["raw_text"] in raw for q in doc["quotes"])
+        joined = json.dumps(doc, ensure_ascii=False)
+        assert "지운 민원입니다" not in joined and "확인 필요 민원입니다" not in joined
+        # 조치 제안 = 관제 카드의 조치
+        assert doc["suggestions"] == card_actions[:4]
+        # DOCX 본문에도 같은 내용이 들어간다
+        d = Document(row["doc_path"])
+        text = "\n".join(p.text for p in d.paragraphs) + "\n" + "\n".join(c.text for t in d.tables for r in t.rows for c in r.cells)
+        assert dept in text and contact in text and "055-000-0005" in text
+        for q in doc["quotes"]:
+            assert q["raw_text"] in text
+        for s in doc["suggestions"]:
+            assert s in text
+        assert f"{doc['count']}건" in text and entry["formula"] in text
+        assert "지운 민원입니다" not in text and "확인 필요 민원입니다" not in text
+
+
+def test_심각도_규칙_경계값_S01_S06_B01_B04_정확히_그_값에서():
+    """경계 바로 아래·정확히·바로 위에서 규칙이 어떻게 갈리는지 (D6-7)."""
+    from datetime import datetime
+
+    from core.severity import rank_labels
+    # B-01: 창 전체가 MIN_WINDOW_TOTAL(10) 미만이면 10 으로 나눈다 — 9건·10건은 같고 11건부터 달라진다
+    a9, a10, a11 = (compute_severity(2, -0.5, n)["base_score"] for n in (9, 10, 11))
+    assert a9 == a10 and a11 < a10
+    assert a10 == round(2 / config.MIN_WINDOW_TOTAL * config.W_FREQ + 0.5 * config.W_INTENSITY, 2)
+    # B-03: 비안전은 NONSAFETY_IMMEDIATE_MIN(5) 미만이면 NONSAFETY_CAP 으로 자른다 — 4건은 잘리고 5건은 안 잘린다
+    four = compute_severity(config.NONSAFETY_IMMEDIATE_MIN - 1, -1.0, 4, spiked=True, unhandled=True)
+    five = compute_severity(config.NONSAFETY_IMMEDIATE_MIN, -1.0, 5, spiked=True, unhandled=True)
+    assert four["score"] == config.NONSAFETY_CAP and five["score"] > config.NONSAFETY_CAP
+    # B-04: 안전은 점수가 SAFETY_FLOOR(60) 미만일 때만 올린다 — 이미 60 이상이면 그대로
+    low = compute_severity(1, -0.3, 1, is_safety=True)
+    high = compute_severity(1, -0.9, 1, is_safety=True)
+    assert low["score"] == config.SAFETY_FLOOR and high["score"] > config.SAFETY_FLOOR
+    # S-04: 안전 SAFETY_THRESHOLD(3) 건이면 점수와 무관하게 immediate, 2건은 아님
+    assert compute_severity(config.SAFETY_THRESHOLD, -0.1, 1000, is_safety=True)["grade"] == "immediate"
+    assert compute_severity(config.SAFETY_THRESHOLD - 1, -0.1, 1000, is_safety=True)["grade"] != "immediate"
+    # S-02·S-03·S-06 곱셈: 같은 입력에서 가중마다 정확히 그 배수
+    base = compute_severity(6, -0.8, 30)["base_score"]
+    assert compute_severity(6, -0.8, 30, is_safety=True)["score"] == round(min(100.0, base * config.W_SAFETY), 2)
+    assert compute_severity(6, -0.8, 30, spiked=True)["score"] == round(min(100.0, base * config.W_SPIKE), 2)
+    assert compute_severity(6, -0.8, 30, unhandled=True)["score"] == round(min(100.0, base * config.W_PENDING), 2)
+    # S-05: 긍정은 순위에 들어가지 않는다
+    ref = datetime(2026, 9, 30, 14, 0, 0)
+    out = rank_labels(_rows([("positive", 3, 0.9, False)] * 12 + [("guide", 2, -0.5, False)], ref), ref=ref)
+    assert [r["label"] for r in out] == ["guide"]
+    # 등급 경계: 80 → immediate · 79.9 → high (S-04 와 별개로 점수 경계)
+    assert grade_of(80) == "immediate" and grade_of(79.9) == "high"
+
+
+def test_조치요청서_docx_구역_유형_건수_개인정보없음():
+    import json
+    import tempfile
+
+    from docx import Document
+
+    from agents import dispatcher, supervisor
+    with _temp_db() as db, _with_local_backend():
+        texts = [f"화장실 {i}번 칸 휴지가 없어요 연락은 010-2345-678{i} 이나 kim{i}@example.com 으로 주세요" for i in range(4)]
+        _seed(db, [(6, "restroom", 6 - i, -0.7, False, tx) for i, tx in enumerate(texts)])   # 구역 6 = 임시 화장실 A
+        supervisor.run_once(60)
+        entry = [r for r in db.ranked(60) if r["label"] == "restroom"][0]
+        out = Path(tempfile.mkdtemp())
+        old_out, dispatcher.OUT_DIR = dispatcher.OUT_DIR, out
+        try:
+            dispatcher.run_for("restroom", entry["score"], entry["grade"], entry["formula"], 60)
+        finally:
+            dispatcher.OUT_DIR = old_out
+        with db.connect() as conn:
+            row = conn.execute("SELECT doc_path, doc_json, count FROM action_request WHERE label='restroom'").fetchone()
+        doc = json.loads(row["doc_json"])
+        d = Document(row["doc_path"])
+        text = "\n".join(p.text for p in d.paragraphs) + "\n" + "\n".join(c.text for tb in d.tables for r in tb.rows for c in r.cells)
+        zone_name = db.zones()[5]["name"]
+        assert zone_name in text and zone_name in json.dumps(doc, ensure_ascii=False)        # 구역
+        assert config.LABELS["restroom"] in text and doc["label_ko"] == config.LABELS["restroom"]   # 유형
+        assert f"{len(texts)}건" in text and doc["count"] == row["count"] == len(texts)            # 건수
+        for leak in ("010-2345", "@example.com", "kim0", "kim3"):                                 # 개인정보 없음
+            assert leak not in text and leak not in json.dumps(doc, ensure_ascii=False), leak
+        assert "[연락처]" in text and "[이메일]" in text                                          # 마스킹 표시는 남는다
 
 
 def test_운영자코드_미설정이면_관리자_동작은_전부_거부():

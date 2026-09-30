@@ -1,33 +1,22 @@
 // JS 실패 안내(index.html #boot-msg) 점검 — 정상이면 숨김, 번들 JS 를 막으면 표시. 사용: node boot_check.mjs <base>
 // 구형 브라우저를 흉내 낼 수는 없어서 "스크립트가 못 돌아 #app 이 빈 채로 남는 상황" 을 요청 차단으로 만든다.
-import { quitChrome } from "./chrome_util.mjs";
-import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { openChrome, quitChrome } from "./lib.mjs";
 
 const base = process.argv[2];
-const port = 9700 + Math.floor(Math.random() * 90);
-const chrome = spawn("C:/Program Files/Google/Chrome/Application/chrome.exe", ["--headless=new", "--disable-gpu", "--no-first-run",
-  `--user-data-dir=${mkdtempSync(join(tmpdir(), "boot-"))}`, `--remote-debugging-port=${port}`, "about:blank"], { stdio: "ignore" });
 const SLOW = Math.max(1, Number(process.env.UI_SLOW) || 1);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms * SLOW));
-let t; for (let i = 0; i < 50; i++) { try { t = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); break; } catch { await sleep(200); } }
-const ws = new WebSocket(t.find((x) => x.type === "page").webSocketDebuggerUrl);
-await new Promise((r) => ws.addEventListener("open", r));
-let id = 0; const P = new Map(); let blockJs = false; const blocked = [];
-ws.addEventListener("message", (e) => {
-  const m = JSON.parse(e.data);
-  if (m.id && P.has(m.id)) { P.get(m.id)(m.result); P.delete(m.id); return; }
+let blockJs = false; const blocked = [];
+const { chrome, ws, send, ev } = await openChrome({
+  prefix: "boot-",
+  onMessage: (m) => {
   if (m.method === "Fetch.requestPaused") {
     const u = m.params.request.url;
     const fail = blockJs && /\.(js|ts)(\?|$)/.test(u.split("#")[0]) && !/\/@vite\/client/.test(u);
     if (fail) { blocked.push(u.replace(/^.*\//, "")); send("Fetch.failRequest", { requestId: m.params.requestId, errorReason: "Failed" }); }
     else send("Fetch.continueRequest", { requestId: m.params.requestId });
   }
+  },
 });
-const send = (method, params = {}) => new Promise((r) => { const n = ++id; P.set(n, r); ws.send(JSON.stringify({ id: n, method, params })); });
-const ev = async (x) => (await send("Runtime.evaluate", { expression: x, returnByValue: true })).result.value;
 let ok = true;
 const check = (name, cond, detail = "") => { ok &&= !!cond; console.log(`${cond ? "✓" : "✗"} ${name}${detail ? "  — " + detail : ""}`); };
 const STATE = `(() => { const m = document.getElementById("boot-msg"), a = document.getElementById("app"); return m && a ? JSON.stringify({ msgHidden: m.hidden, appKids: a.children.length }) : null; })()`;

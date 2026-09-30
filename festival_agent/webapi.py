@@ -324,10 +324,10 @@ def fingerprint() -> tuple:
     with db.connect() as conn:
         q = lambda sql: tuple(conn.execute(sql).fetchone())
         return (
-            q("SELECT MAX(id), COUNT(*), COUNT(deleted_at) FROM feedback"),
+            q("SELECT MAX(id), COUNT(*), COUNT(deleted_at), MAX(deleted_at) FROM feedback"),   # 개수만 보면 '되돌리기 + 새 삭제'가 1초 안에 겹칠 때 놓친다 → 지운 시각의 최댓값도
             q("SELECT COUNT(*) FROM classification WHERE status='pending'"),
             # 확인 필요 처리(유형 지정·닫기·되돌리기)가 화면에 바로 반영되도록
-            q("SELECT COUNT(*), COUNT(reviewed_at), COALESCE(SUM(CASE status WHEN 'review' THEN 1 "
+            q("SELECT COUNT(*), COUNT(reviewed_at), MAX(reviewed_at), COALESCE(SUM(CASE status WHEN 'review' THEN 1 "
               "WHEN 'dismissed' THEN 2 ELSE 0 END), 0) FROM classification"),
             q("SELECT MAX(id) FROM severity"),
             q("SELECT MAX(id) FROM briefing"),
@@ -523,6 +523,8 @@ class ExclusiveServer(ThreadingHTTPServer):
     """
     allow_reuse_address = False
     daemon_threads = True
+    # listen 대기열. 기본값(5)이면 방문객이 한꺼번에 접속할 때(행사장 QR) 대기열이 넘쳐 일부 연결이 거부된다 (같은 글 동시 8번 시험에서 간헐 실패로 발견).
+    request_queue_size = 128
 
     def server_bind(self) -> None:
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):          # Windows 전용

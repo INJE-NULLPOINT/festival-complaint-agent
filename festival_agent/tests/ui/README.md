@@ -78,15 +78,19 @@ cd web && WEBAPI_PORT=8799 npx vite --port 5174 --strictPort --host 127.0.0.1
 - **기계 부하:** 다른 프로그램(게임·빌드·다른 세션의 테스트)이 CPU 를 많이 쓰면 화면이 늦게 반응해 고정 대기 시간이 모자란다. `run_all` 은 시작할 때 CPU 사용률을 재서
   `UI_SLOW`(×1 · ×2 · ×3)를 정하고, `admin_flow.mjs` 가 기다리는 시간만 그 배율로 늘린다 (검사 기준은 그대로). 배율은 보고서 '환경'에 적힌다.
   점검이 부하 때문에 깨지는지 제품 때문에 깨지는지 헷갈리면 보고서의 CPU 사용률부터 본다.
-- **크롬 정리:** 스크립트는 `chrome_util.mjs` 의 `quitChrome` 으로 크롬을 끈다 (먼저 정상 종료, 안 되면 하위까지 `taskkill /T`). `chrome.kill()` 만 하면 renderer 등이 고아로 남아
+- **크롬 정리:** 스크립트는 `lib.mjs` 의 `quitChrome` 으로 크롬을 끈다 (먼저 정상 종료, 안 되면 하위까지 `taskkill /T`). `chrome.kill()` 만 하면 renderer 등이 고아로 남아
   프로필 파일을 붙잡고 임시 폴더가 안 지워진다 (renderer 는 명령줄에 `--user-data-dir` 이 없어 경로로도 못 찾는다). 그래도 남은 `ui-suite-*` 폴더는 다음 `run_all` 시작 때 (10분 지난 것부터) 지운다.
 
-## 5. 연결 끊김 · 대량 데이터 (D5-36 · D5-37)
+## 5. 서버 동작 점검 (D5-36 · D5-37 · D5-40) — `server_flow.mjs`
 
-- `reconnect_flow.mjs` — 서버를 실제로 껐다 켠다. 스스로 webapi(복사본 DB)·vite·크롬을 빈 포트에 띄우고 끝나면 모두 끈다(본 서버 영향 없음).
-  관제: '재연결 중' → 8초 뒤 배너(서버에 연결할 수 없습니다 · 마지막 갱신 HH:MM) → 켜면 새로고침 없이 '실시간' 복귀 · 화면이 지워지지 않음.
-  방문객: 꺼진 채 접수하면 입력·구역이 남고 버튼이 '다시 시도', 켠 뒤 재시도하면 접수함에 정확히 1건.
-- `perf_check.mjs` + `make_big_db.py` — 민원 1,000건·카드 30장(인자로 바꿀 수 있음) 복사본 DB 에서 `/api/control` 응답 시간(순차 30회 중앙값·최대),
-  SSE 30개를 붙인 채 응답 시간, 관제 첫 그리기, 변경 → 화면 반영 시간과 그동안의 브라우저 작업 시간을 잰다. 예산은 파일 위쪽 `BUDGET`(ms, `UI_SLOW` 배율 적용).
-  1,000건 기준 측정값(2026-09-30, 이 PC): control 중앙값 약 22ms · 첫 그리기 약 0.4초 · 다시 그리기 브라우저 작업 약 20ms. 10,000건에서도 control 약 55ms · 첫 그리기 약 0.6초.
-- 둘 다 `run_all` 묶음(`reconnect` · `perf`)으로 돌고, 따로 돌려도 된다: `node tests/ui/perf_check.mjs 10000 30`.
+스크립트 하나에 세 묶음이 있다: `node tests/ui/server_flow.mjs reconnect | perf [민원수] [카드수] | security`. 모두 스스로 webapi(복사본 DB)·vite·(필요하면) 크롬을
+빈 포트에 띄우고 끝나면 모두 끈다 (본 서버·다른 세션 영향 없음). `run_all` 이 세 묶음(`reconnect` · `perf` · `security`)으로 부른다.
+
+- `reconnect` — 서버를 실제로 껐다 켠다. 관제: '재연결 중' → 8초 뒤 배너(서버에 연결할 수 없습니다 · 마지막 갱신 HH:MM) → 켜면 새로고침 없이 '실시간' 복귀 ·
+  끊긴 채 다시 그려도 화면이 지워지지 않음. 방문객: 꺼진 채 접수하면 입력·구역이 남고 버튼이 '다시 시도', 켠 뒤 재시도하면 접수함에 정확히 1건.
+- `perf` — 민원 1,000건·카드 30장(`make_mobile_db.py <dst> --big 민원수 카드수`) 복사본에서 `/api/control` 응답 시간(순차 30회 중앙값·최대, SSE 30개 연결 중 포함),
+  관제 첫 그리기, 변경 → 화면 반영 시간과 그동안의 브라우저 작업 시간. 예산은 파일의 `BUDGET`(ms, `UI_SLOW` 배율 적용).
+  1,000건 기준(2026-09-30, 이 PC): control 중앙값 약 22ms · 첫 그리기 약 0.4초 · 다시 그리기 작업 약 20ms. 10,000건에서도 control 약 55ms · 첫 그리기 약 0.6초.
+- `security` — 17KB 본문 413 · Content-Length 음수 400 · 배열/깨진 JSON/모르는 인자 400(고정 문구) · text/plain 415 · 같은 글 동시 8번 → 1건 ·
+  SSE 51번째 503 · 멈춘 요청 끊김 · 500 응답에 경로·SQL 없음.
+- 공용 도구는 `lib.mjs` (크롬 열기 `openChrome` · 정리 `quitChrome` · `freePort` · `killTree` · 결과 출력 `reporter`). 점검용 DB 는 `make_mobile_db.py` 하나(기본 모바일 극단 입력 · `--big` 대량).

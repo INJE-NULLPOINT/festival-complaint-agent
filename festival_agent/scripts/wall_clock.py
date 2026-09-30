@@ -9,6 +9,7 @@
     python scripts/wall_clock.py --mode agent --n 5 --batch 10     1건 5번 + 10건 묶음
     python scripts/wall_clock.py --backend anthropic               API 경로 (키가 있을 때 — 제출 기준 측정)
     python scripts/wall_clock.py --backend local                   비용 없는 구조 확인 (규칙 대역)
+    python scripts/wall_clock.py --backend local --concurrent 20   동시 접수 20건 — 유실·중복 수와 유입·분류 지연을 표로 (D6-8)
 
 결과는 표로 출력한다. --report 를 주면 tests/wall_clock_report.md 에도 쓴다 (덮어씀).
 판정 기준은 '중앙값'과 '최댓값'이다 (신청서 목표: 접수 후 10초 이내). 폴링 위상을 흩으려고 접수 전에 0~3초 무작위로 쉰다.
@@ -47,19 +48,97 @@ TEXTS = [
 ]
 
 
+def run_concurrent(args, db, webapi, worker, log, tmp) -> int:
+    """동시 접수 N건 — 서로 다른 문장을 스레드 N개가 한꺼번에 접수하고 워커가 처리하는 동안 지연을 잰다.
+
+    유실 = 접수번호는 받았는데 끝내 민원(feedback)이 안 생긴 건(저장 거절 포함). 중복 = 같은 문장이 민원으로 둘 이상 생긴 건.
+    유입 지연 = 접수 시작 → feedback 생성, 분류 지연 = 접수 시작 → 분류(done·review) 완료.
+    """
+    import threading
+    n = args.concurrent
+    texts = [f"{TEXTS[i % len(TEXTS)]} ({i + 1}번째 동시 접수 시험)" for i in range(n)]
+    receipts: dict[int, int] = {}          # 접수번호 → 문장 번호
+    errors: list[str] = []
+    gate = threading.Barrier(n)
+    lock = threading.Lock()
+
+    def go(i: int) -> None:
+        gate.wait()
+        try:
+            r = webapi.submit_feedback(1 + i % 6, texts[i], source=None)
+            with lock:
+                receipts[r] = i
+        except Exception as exc:                        # noqa: BLE001 — 접수 자체가 실패한 것도 유실로 센다
+            with lock:
+                errors.append(str(exc))
+    t0 = time.time()
+    ths = [threading.Thread(target=go, args=(i,)) for i in range(n)]
+    [th.start() for th in ths]
+    [th.join() for th in ths]
+    t_submitted = time.time() - t0
+
+    seen_ingest: dict[int, float] = {}
+    seen_done: dict[int, float] = {}
+    deadline = time.time() + args.timeout
+    while time.time() < deadline and len(seen_done) < len(receipts):
+        with db.connect() as c:
+            for r in receipts:
+                row = c.execute("SELECT i.feedback_id fid, c.status st FROM feedback_inbox i "
+                                "LEFT JOIN classification c ON c.feedback_id=i.feedback_id WHERE i.id=?", (r,)).fetchone()
+                now = time.time() - t0
+                if row and row["fid"] not in (None, -1) and r not in seen_ingest:
+                    seen_ingest[r] = now
+                if row and row["st"] in ("done", "review") and r not in seen_done:
+                    seen_done[r] = now
+        time.sleep(0.1)
+    worker.terminate()
+    try:
+        worker.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        worker.kill()
+    log.close()
+
+    with db.connect() as c:
+        fb = [r["raw_text"] for r in c.execute("SELECT raw_text FROM feedback WHERE source='qr'").fetchall()]
+    dup = len(fb) - len(set(fb))
+    lost = n - len(seen_done)                             # 끝내 분류까지 못 간 건 (접수 실패 포함)
+    lost_ingest = n - len(seen_ingest)
+    def stat(d):
+        v = sorted(d.values())
+        return (f"{statistics.median(v):.1f}s", f"{max(v):.1f}s") if v else ("-", "-")
+    lines = [
+        f"# 동시 접수 {n}건 측정 ({datetime.now():%Y-%m-%d %H:%M})", "",
+        f"- 모드 `{args.mode}` · 백엔드 `{args.backend}` · 임시 DB(운영 DB 미사용) · 접수 스레드 {n}개가 한꺼번에 출발 (접수 호출 완료까지 {t_submitted:.2f}s)", "",
+        "| 지표 | 값 |", "|---|---|",
+        f"| 접수 성공 / 요청 | {len(receipts)} / {n} (접수 오류 {len(errors)}건) |",
+        f"| 유실(유입까지) | {lost_ingest}건 |", f"| 유실(분류까지) | {lost}건 |", f"| 중복 민원 | {dup}건 |",
+        f"| 유입 지연 중앙값 · 최댓값 | {stat(seen_ingest)[0]} · {stat(seen_ingest)[1]} |",
+        f"| 분류 지연 중앙값 · 최댓값 | {stat(seen_done)[0]} · {stat(seen_done)[1]} |", "",
+    ]
+    if errors:
+        lines.append(f"- 접수 오류 예: {errors[0][:80]}")
+    out = "\n".join(lines)
+    print("\n" + out)
+    if args.report:
+        (ROOT / "tests" / "wall_clock_report.md").write_text(out + "\n", encoding="utf-8")
+    return 0 if not lost and not dup else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--mode", choices=["agent", "prefetch"], default="agent", help="CLASSIFY_MODE")
     ap.add_argument("--backend", choices=["claude_code", "anthropic", "local"], default="claude_code", help="LLM_BACKEND")
     ap.add_argument("--n", type=int, default=3, help="1건 접수를 몇 번 잴지")
     ap.add_argument("--batch", type=int, default=5, help="한꺼번에 접수할 묶음 건수 (0 이면 생략)")
+    ap.add_argument("--concurrent", type=int, default=0, metavar="N",
+                    help="동시 접수 N건(스레드가 한꺼번에 출발)을 넣고 유실·중복 수, 유입·분류 지연 중앙값·최댓값을 잰다 (--n·--batch 대신)")
     ap.add_argument("--timeout", type=int, default=180, help="한 번 기다리는 최대 초")
     ap.add_argument("--report", action="store_true", help="tests/wall_clock_report.md 에도 쓴다")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 
     need = args.n + max(args.batch, 0)
-    if need > len(TEXTS):
+    if not args.concurrent and need > len(TEXTS):
         print(f"측정용 문장이 {len(TEXTS)}개뿐이라 --n 과 --batch 합이 그 이하여야 합니다 (지금 {need}).")
         return 2
     tmp = Path(tempfile.mkdtemp(prefix="wall_")) / "t.db"
@@ -91,6 +170,9 @@ def main() -> int:
                         done[r] = time.time()
             time.sleep(0.25)
         return done
+
+    if args.concurrent:
+        return run_concurrent(args, db, webapi, worker, log, tmp)
 
     results: list[tuple[str, list[float], int]] = []
     k = 0

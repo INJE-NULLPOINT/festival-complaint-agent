@@ -120,7 +120,7 @@ def main() -> int:
     print(f"  출처  {len(Counter(r['source_name'] for r in out))}종 · "
           f"정답 라벨 {labeled}행 · 구역 지정 {sum(1 for r in out if r['zone'])}행")
     if len(out) < 100:
-        print(f"  ※ 100행 미만입니다. 할일 D6-6 판정은 출처 URL 이 있는 행 100개 이상부터 통과합니다.")
+        print("  ※ 100행 미만입니다. 할일 D6-6 판정은 출처 URL 이 있는 행 100개 이상부터 통과합니다.")
     return 0
 
 

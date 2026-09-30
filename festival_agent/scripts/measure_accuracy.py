@@ -292,7 +292,6 @@ def main() -> int:
     wrong = [(r0["texts"][f], y, r0["got"].get(f, {}).get("label") or "-")
              for f, y in r0["expected"].items() if r0["got"].get(f, {}).get("label") != y]
 
-    tok = r0["tok"]
     cost_line = ""
     if any(r["tok"]["calls"] for r in runs):
         pin, pout, pcache = config.PRICE_PER_MTOK.get(config.MODEL, (0, 0, 0))
@@ -320,7 +319,7 @@ def main() -> int:
     if r0["held"]:
         print(f"  ※ 확인 필요 {r0['held']}건은 유형을 정하지 않아 오답으로 셉니다")
     if operator_total:
-        print(f"  ※ 운영자가 처리한 건은 정확도에서 뺐습니다 (모델 정답이 아님)")
+        print("  ※ 운영자가 처리한 건은 정확도에서 뺐습니다 (모델 정답이 아님)")
     print(f"안전 재현율{tag} {mean_safe_k}/{safety_n}"
           + (f" = {mean_safe_k / safety_n:.1%}   Wilson 95% CI {ci_text(mean_safe_k, safety_n)}" if safety_n else ""))
     if repeat > 1 and safe_rates:

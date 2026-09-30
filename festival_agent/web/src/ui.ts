@@ -58,14 +58,33 @@ export function typeIcon(label: string): string {
 const UI_PATHS = {
   trash: `<path d="M4 7h16"/><path d="M9 7V4.5h6V7"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>`,
   pin: `<path d="M12 21s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="9.5" r="2.5"/>`,
+  // 안내 상자(빈 화면·오류)용 — 같은 선 아이콘 스타일 (D5-39)
+  inbox: `<path d="M3 13l3-8h12l3 8"/><path d="M3 13v6h18v-6"/><path d="M3 13h5l1 3h6l1-3h5"/>`,
+  check: `<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.8"/>`,
+  alert: `<path d="M12 3l10 18H2z"/><path d="M12 10v5"/><path d="M12 18.2h.01"/>`,
+  lock: `<rect x="5" y="11" width="14" height="10" rx="1"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>`,
 };
 export function uiIcon(name: keyof typeof UI_PATHS): string {
   return `<svg class="ti" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${UI_PATHS[name]}</svg>`;
 }
 
+/** 빈 화면·오류 안내 상자 (D5-39) — 흑백 톤. 개발자 말투가 아니라 운영자가 다음에 무엇을 하면 되는지를 말한다.
+ *  kind 'error' 는 실패를 뜻하므로 role=alert (스크린리더가 바로 읽는다). 빈 화면은 정적이라 역할을 주지 않는다.
+ *  inline 은 목록 안에 들어가는 작은 형태 (테두리 없음). */
+export function stateBox(o: { icon?: "inbox" | "check" | "alert" | "lock"; title: string; hint?: string; kind?: "empty" | "error"; inline?: boolean }): string {
+  const kind = o.kind ?? "empty";
+  const icon = o.icon ?? (kind === "error" ? "alert" : "inbox");
+  return `<div class="state ${kind}${o.inline ? " inline" : ""}"${kind === "error" ? ` role="alert"` : ""}>
+    <span class="state-ico" aria-hidden="true">${uiIcon(icon)}</span>
+    <div class="state-txt"><p class="state-t">${esc(o.title)}</p>${o.hint ? `<p class="state-h">${esc(o.hint)}</p>` : ""}</div>
+  </div>`;
+}
+
 /** 민원 지우기 버튼 (D5-30). 글자 없이 아이콘만이라 aria-label 이 이름이다. */
-export function delButton(id: number): string {
-  return `<button type="button" class="del" data-del="${id}" aria-label="민원 지우기" title="민원 지우기">${uiIcon("trash")}</button>`;
+export function delButton(id: number, descId?: string): string {
+  // 같은 이름 '민원 지우기' 가 여러 개라서, 어느 민원인지 aria-describedby 로 원문을 이어 읽게 한다 (이름은 그대로 유지)
+  const desc = descId ? ` aria-describedby="${descId}"` : "";
+  return `<button type="button" class="del" data-del="${id}" aria-label="민원 지우기" title="민원 지우기"${desc}>${uiIcon("trash")}</button>`;
 }
 
 /** 서버가 JSON 문자열로 주는 열을 배열로. 이미 배열이면 그대로, 깨졌으면 빈 배열. */
@@ -190,6 +209,7 @@ export function toast(msg: string, kind: "info" | "warn" = "info"): void {
   const box = document.getElementById("toasts")!;
   const el = document.createElement("div");
   el.className = `toast ${kind}`;
+  el.setAttribute("role", kind === "warn" ? "alert" : "status");   // 스크린리더: 경고는 바로, 안내는 차분히 읽는다 (D5-38)
   el.textContent = msg;
   box.appendChild(el);
   setTimeout(() => {
@@ -200,10 +220,11 @@ export function toast(msg: string, kind: "info" | "warn" = "info"): void {
 
 /** 버튼이 달린 토스트 (D5-30 '지웠습니다 · 되돌리기'). ms 동안만 보이고, 버튼을 누르면 바로 닫히며 onAction 이 실행된다.
  *  #toasts 는 터치를 통과시키지만 이 버튼만은 눌려야 하므로 CSS 에서 .toast-act 만 pointer-events:auto 이다. */
-export function toastAction(msg: string, actionLabel: string, onAction: () => void, ms = 5000): void {
+export function toastAction(msg: string, actionLabel: string, onAction: () => void, ms = 10000): void {
   const box = document.getElementById("toasts")!;
   const el = document.createElement("div");
   el.className = "toast has-act";
+  el.setAttribute("role", "status");
   const text = document.createElement("span");
   text.textContent = `${msg} ·`;
   const btn = document.createElement("button");
@@ -221,5 +242,18 @@ export function toastAction(msg: string, actionLabel: string, onAction: () => vo
   };
   btn.addEventListener("click", () => { close(); onAction(); });
   box.appendChild(el);
-  setTimeout(close, ms);
+  // 시간 제한이 있는 안내는 10초 이상 보이게 하고, 마우스를 올리거나 키보드 포커스가 있는 동안은 멈춘다 (WCAG 2.2.1).
+  // 멈췄다 놓으면 남은 시간이 3초보다 짧아도 3초는 더 보인다.
+  let left = ms, started = Date.now(), timer: number | undefined;
+  const arm = () => { started = Date.now(); timer = window.setTimeout(close, left); };
+  const pause = () => {
+    if (closed || timer === undefined) return;
+    clearTimeout(timer); timer = undefined;
+    left = Math.max(3000, left - (Date.now() - started));
+  };
+  const resume = () => { if (!closed && timer === undefined) arm(); };
+  [el, btn].forEach((n) => { n.addEventListener("mouseenter", pause); n.addEventListener("mouseleave", resume); });
+  el.addEventListener("focusin", pause);
+  el.addEventListener("focusout", (e) => { if (!el.contains(e.relatedTarget as Node | null)) resume(); });
+  arm();
 }

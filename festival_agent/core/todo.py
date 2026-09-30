@@ -11,7 +11,7 @@ worker.py 가 Agent Path 를 한 바퀴 돌 때마다 이 파일을 다시 그�
 """
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -288,6 +288,7 @@ TASKS: list[Task] = [
     Task("D5-42", "지운 민원 목록·복구 (5초 토스트 뒤에도 되돌리기)", "D5 오류수정·안정화"),
 
     Task("D5-43", "출처 판정 위조 방지 (X-Forwarded-For 는 믿는 프록시가 붙인 마지막 값만)", "D5 오류수정·안정화"),
+    Task("D5-44", "SSE 변경 감지를 개수 대신 최신 수정 시각으로 (되돌리기·삭제가 1초 안에 겹치면 놓침)", "D5 오류수정·안정화"),
 
     # D6 테스트·검증
     Task("D6-1", "Test Case 5종 `--live` 수행", "D6 테스트·검증", _scenarios_live,
@@ -344,7 +345,7 @@ DONE_TASKS: list[Task] = [
 # auto 항목은 판정이 다시 실패하면(되돌아가면) 목록에 다시 나타난다.
 ARCHIVED: set[str] = {
     "E2E", "DOCX", "D5-3", "D5-7", "D5-8", "D5-10", "D5-11", "D5-12", "D5-13",
-    "D5-15", "D5-16", "D5-17", "D5-19", "D5-20", "D5-21", "D5-23", "D5-24", "D5-25", "D5-26", "D5-27", "D5-28", "D5-29", "D5-30", "D5-32", "D5-35", "D5-34", "D5-36", "D5-37", "D5-40", "D5-41", "D5-43", "D6-2",
+    "D5-15", "D5-16", "D5-17", "D5-19", "D5-20", "D5-21", "D5-23", "D5-24", "D5-25", "D5-26", "D5-27", "D5-28", "D5-29", "D5-30", "D5-32", "D5-35", "D5-34", "D5-36", "D5-37", "D5-40", "D5-41", "D5-43", "D5-33", "D5-38", "D5-39", "D5-42", "D5-31", "D5-44", "D6-2", "D6-7", "D6-8",
 }
 
 # AI 가 할 수 있는 일은 끝났고 키나 사람만 남은 항목. 한 줄로 모아 '대기' 절에 그린다.
@@ -362,7 +363,6 @@ WAITING: dict[str, str] = {
     "D6-3": "키 — API 로 재측정 (claude_code 100%)",
     "D6-4": "사람 — 3명 (QR·확인서 준비: 제출_준비/qr/)",
     "D6-5": "키 — API 로 실측 (참고값 제출_준비/원가측정_참고.md)",
-    "D5-31": "사람 — festival_agent/.env 에 ADMIN_CODE= 직접 입력(구현·검증 끝: 코드 없음·틀림 거부, 5회 잠금, 방문객 접수 통과)",
     "D6-6": "사람 — 실제 리뷰 수집 (가이드: 제출_준비/실제리뷰_수집가이드.md)",
 }
 

@@ -1,6 +1,6 @@
 // 조치 — 심각도에 따라 조치요청서를 만들고, 처리 상태를 바꾼다.
 import { api, type Action, type DocJob } from "../data";
-import { LABELS, STATUS, STATUS_LABEL, badge, esc, hhmm, isClosed, makeFresh, pop, toast, typeChip } from "../ui";
+import { LABELS, STATUS, STATUS_LABEL, badge, esc, hhmm, isClosed, makeFresh, pop, stateBox, toast, typeChip } from "../ui";
 
 const opened = new Set<number>(); // 미리보기를 펼친 요청서 id
 // 흑백에서도 상태가 모양으로 구분되게 (D5-23): 요청 ● · 조치중 ◐ · 완료 ✓ · 대체됨 –
@@ -83,14 +83,15 @@ export async function renderAction(root: HTMLElement): Promise<void> {
   actions.forEach((a) => prevStatus.set(a.id, a.status));
 
   root.innerHTML = `
+    <h1 class="sr-only">조치 — 조치요청서 만들기와 처리 현황</h1>
     <section class="card">
       <h2 class="pg-title">조치 대상 <span class="muted small">심각도 순</span></h2>
       ${targets.length ? `<ul class="targets">${targets.map((s) => {
         const j = lastJob.get(s.label);
         const busy = j && (j.status === "queued" || j.status === "running");
         const state = busy ? `<span class="muted">${j!.status === "queued" ? "대기 중" : "작성 중"}…</span>`
-          : j?.status === "failed" ? `<span class="err small">실패: ${esc(j.error)}</span>`
-          : openLabels.has(s.label) ? `<span class="muted">요청서 발송됨</span>` : "";
+          : j?.status === "failed" ? `<span class="err small" title="${esc(j.error)}">작성에 실패했습니다 · 다시 생성해 주세요</span>`
+          : openLabels.has(s.label) ? `<span class="muted">요청서 있음(처리 전)</span>` : "";
         const hot = s.grade === "immediate" || s.grade === "high";
         const sent = openLabels.has(s.label);   // 미완료 요청서가 이미 있다 → 중복 생성 주의
         return `<li>
@@ -102,13 +103,13 @@ export async function renderAction(root: HTMLElement): Promise<void> {
           <button class="btn ${hot && !sent ? "primary" : ""}" data-gen="${esc(s.label)}" ${busy ? "disabled" : ""}>
             ${sent ? "다시 생성" : "조치요청서 생성"}</button>
         </li>`;
-      }).join("")}</ul>` : `<p class="muted">판정된 민원이 없습니다.</p>`}
+      }).join("")}</ul>` : stateBox({ icon: "inbox", title: "조치할 대상이 없습니다", hint: "판정된 민원이 생기면 심각도 순으로 나타납니다." })}
     </section>
 
     <section class="card">
       <h2>조치요청서 · 처리 현황</h2>
       ${current.length ? `<ul class="docs">${current.map(docItem).join("")}</ul>`
-        : `<p class="muted">아직 만든 요청서가 없습니다.</p>`}
+        : stateBox({ icon: "inbox", title: "아직 만든 조치요청서가 없습니다", hint: "위 조치 대상에서 [조치요청서 생성]을 누르면 여기에 나타납니다." })}
       ${old.length ? `
         <button type="button" class="linkbtn" id="toggle-old" aria-expanded="${showOld}">
           ${showOld ? "대체된 요청서 접기" : `대체된 요청서 ${old.length}건 보기`}</button>

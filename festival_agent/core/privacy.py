@@ -66,10 +66,6 @@ def mask(text: str) -> str:
     return out
 
 
-def has_pii(text: str) -> bool:
-    return any(p.search(text) for p, _ in PATTERNS)
-
-
 def looks_like_injection(text: str) -> bool:
     """프롬프트 인젝션 시도로 보이는가.
 

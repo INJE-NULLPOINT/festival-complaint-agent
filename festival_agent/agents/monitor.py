@@ -11,25 +11,18 @@ from core.llm import Agent, tool
 
 SYSTEM = """너는 지역 축제 운영 관제 시스템의 '심각도 감시 에이전트'다.
 
-역할: 지금 이 순간 어떤 유형의 민원이 얼마나 심각한지 판정하고,
-즉시 대응이 필요한 상황을 찾아 알림을 올린다.
+역할: 지금 어떤 유형의 민원이 얼마나 심각한지 판정하고, 즉시 대응이 필요한 상황에 알림을 올린다.
 
 절차
-1. get_window_stats 로 최근 상황을 파악한다. 기본 윈도우는 60분이다.
-   급증이 의심되면 더 짧은 윈도우(15~30분)로 한 번 더 확인해도 된다.
-2. 각 유형에 대해 score_label 을 호출해 점수와 등급을 받는다.
+1. get_window_stats 로 최근 상황을 파악한다 (기본 윈도우 60분). 급증이 의심되면 더 짧은 윈도우(15~30분)로 한 번 더 확인해도 된다.
+2. 유형마다 score_label 을 호출해 점수와 등급을 받는다.
 3. save_snapshot 으로 이번 판정을 기록한다.
-4. 아래에 해당하는 유형만 raise_alert 로 알림을 올린다.
-   - 등급이 immediate 인 경우
-   - 급증(spiked)이 감지된 경우
-   - 직전 판정보다 등급이 올라간 경우
+4. 아래에 해당하는 유형만 raise_alert 로 알린다: 등급이 immediate / 급증(spiked) 감지 / 직전 판정보다 등급 상승.
 5. 마지막에 가장 심각한 유형 1개와 그 이유를 두 문장 이내로 보고한다.
 
 반드시 지킬 것
-- **점수를 직접 계산하지 마라.** 반드시 score_label 도구의 반환값을 쓴다.
-  도구가 준 formula 문자열을 그대로 인용해 설명한다.
-- 건수가 많다고 심각한 것이 아니다. 안전 관련은 건수가 적어도 위로 올라간다.
-  이 역전이 보이면 알림 문구에 그 이유를 명시하라.
+- **점수를 직접 계산하지 마라.** score_label 의 반환값을 쓰고, 도구가 준 formula 문자열을 그대로 인용해 설명한다.
+- 건수가 많다고 심각한 것이 아니다. 안전 관련은 건수가 적어도 위로 올라간다. 이 역전이 보이면 알림 문구에 이유를 명시하라.
 - 알림을 남발하지 마라. 조건에 맞는 것만 올린다.
 """
 
@@ -57,9 +50,8 @@ def get_window_stats(window_min: int = config.DEFAULT_WINDOW_MIN) -> dict:
 @tool(
     name="score_label",
     description=(
-        "유형 1개의 심각도 점수와 등급을 계산한다. "
-        "계산은 검증된 함수가 수행하므로 같은 입력에는 항상 같은 결과가 나온다. "
-        "반환되는 formula 문자열이 판정 근거다."
+        "유형 1개의 심각도 점수·등급을 계산한다. 검증된 함수가 계산하므로 같은 입력에는 같은 결과가 나온다. "
+        "반환 formula 가 판정 근거다."
     ),
     properties={
         "label": {"type": "string", "enum": list(config.LABELS)},
@@ -83,8 +75,7 @@ def score_label(label: str, window_min: int = config.DEFAULT_WINDOW_MIN) -> dict
 
 @tool(
     name="save_snapshot",
-    description=("현재 구간의 전체 심각도 판정을 기록한다. 추이 그래프의 원천이 된다. "
-                 "같은 판정이 이미 기록돼 있으면 다시 쓰지 않는다."),
+    description="현재 구간의 전체 심각도 판정을 기록한다 (추이의 원천). 같은 판정이 이미 있으면 다시 쓰지 않는다.",
     properties={"window_min": {"type": "integer"}},
 )
 def save_snapshot(window_min: int = config.DEFAULT_WINDOW_MIN) -> dict:

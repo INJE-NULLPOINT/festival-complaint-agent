@@ -1,6 +1,6 @@
 // 헤드리스 크롬을 DevTools 프로토콜로 몰아 콘솔·네트워크·DOM 을 기록한다.
 // 사용: node cdp.mjs <url> [대기ms] [가로] [세로] [스크린샷경로]
-import { quitChrome } from "./chrome_util.mjs";
+import { quitChrome } from "./lib.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -3,9 +3,9 @@
 // 3초 안에 "지금 제일 위험한 것 1개" 가 읽혀야 한다 (할일 D5-15). 카드는 '무엇이 · 어디서 · 무엇부터 · 무엇을 할지' 를 한 장에 담는다 (D5-29).
 // 서버가 issues[] 를 아직 안 주면(구버전) 예전 유형 단위 화면(심각도 1위 카드 + 유형 순위)으로 그린다.
 import { storedCode } from "../admin";
-import { api, zones, type Issue, type IssueAction, type Quote, type ReviewItem, type Severity } from "../data";
+import { api, zones, type DeletedItem, type Issue, type IssueAction, type Quote, type ReviewItem, type Severity } from "../data";
 import {
-  LABELS, STATUS_LABEL, badge, delButton, esc, flipPlay, flipSnap, hhmm, jsonList, makeFresh, pop, reduced, toast, toastAction,
+  LABELS, STATUS_LABEL, badge, delButton, esc, flipPlay, flipSnap, hhmm, jsonList, makeFresh, pop, reduced, stateBox, toast, toastAction,
   typeChip, typeIcon, uiIcon,
 } from "../ui";
 
@@ -36,6 +36,13 @@ let rvOpen = false;
 const hiddenReview = new Set<number>();
 /** 확인 필요 처리에서 고를 수 있는 유형 (긍정 포함: 진짜 칭찬이면 긍정으로) */
 const REVIEW_LABELS = ["safety", "crowd", "parking", "restroom", "price", "guide", "positive"];
+
+// 지운 민원 목록 (D5-42): 패널이 열려 있는지, 마지막으로 가져온 목록, 그 목록을 가져올 때의 서버 '지운 개수'
+let dlOpen = false;
+let dlItems: DeletedItem[] | null = null;
+let dlCount = -1;
+let deletedNow = 0;          // 이번 화면의 서버 지운 개수 (목록이 낡았는지 비교하는 기준)
+let dlRefreshing = false;
 
 /** 결과가 큰 조치에 들어가는 말 — core/config.py ESCALATION_WORDS 와 같게 유지. 서버가 조치마다 표시를 주면 그것을 먼저 쓴다. */
 const ESCALATION = /중단|폐쇄|대피|통제|출동|119|112|경찰|소방|구급/;
@@ -68,6 +75,7 @@ export async function renderControl(root: HTMLElement): Promise<void> {
   const reviewIds = new Set((d.review_items ?? []).map((r) => r.id));
   hiddenReview.forEach((id) => { if (!reviewIds.has(id)) hiddenReview.delete(id); });
 
+  deletedNow = d.deleted ?? 0;
   const feed = d.feed.filter((f) => !hidden.has(f.id));
   const rvItems = (d.review_items ?? []).filter((r) => !hidden.has(r.id) && !hiddenReview.has(r.id));
   const cards = (d.issues ?? []).map(toCard);
@@ -124,25 +132,27 @@ export async function renderControl(root: HTMLElement): Promise<void> {
             </button>
             <div class="formula-box">${esc(s.formula)}</div>
           </li>`;
-  }).join("")}</ol>` : `<p class="muted">다른 유형은 아직 없습니다.</p>`;
+  }).join("")}</ol>` : stateBox({ inline: true, icon: "inbox", title: "다른 유형은 아직 없습니다", hint: "민원이 분류되면 여기에 나타납니다." });
 
   root.innerHTML = `
+    <h1 class="sr-only">관제 — 지금 조치할 일</h1>
     <section class="card brief" aria-label="지금 조치할 일">
       <h2 class="pg-title">지금 조치할 일 <span class="muted small">통합 에이전트 브리핑${b ? ` · ${hhmm(b.created_at)}` : ""}</span></h2>
       ${b ? `<p class="brief-text">${leadSentence(b.text)}</p>${b.rationale ? `<p class="brief-why">근거: ${esc(b.rationale.replace(/^\s*근거\s*[:：]\s*/, ""))}</p>` : ""}`
-          : `<p class="muted">워커가 에이전트를 한 바퀴 돌면 표시됩니다.</p>`}
+          : `<p class="muted">아직 브리핑이 없습니다. 민원이 들어오면 우선순위와 할 일이 자동으로 정리됩니다.</p>`}
       ${hasIssues && flipped && mine && lead ? `<p class="flip">건수 1위 <b>${esc(name(byCount[0].label))} ${byCount[0].freq}건</b>보다
         <b>${esc(lead.zone_name ?? "구역 미상")} ${esc(name(mine.label))} ${mine.freq}건</b>이 먼저입니다</p>` : ""}
     </section>
 
     ${hasIssues ? `
-    ${main.length ? `<div class="icards" aria-label="조치할 일 카드">${main.map((c, i) => issueCard(c, i + 1, i === 0, zoneName)).join("")}</div>`
-      : `<section class="card"><p class="muted">지금 바로 조치할 일은 없습니다.</p></section>`}
+    ${main.length ? `<section class="icards" aria-label="조치할 일 카드">${main.map((c, i) => issueCard(c, i + 1, i === 0, zoneName)).join("")}</section>`
+      : `<section class="card">${stateBox({ icon: "check", title: "지금 바로 조치할 일은 없습니다",
+          hint: more.length + prog.length + done.length ? "조치 중이거나 완료된 건은 아래 묶음에서 볼 수 있습니다." : "새 민원이 들어오면 여기에 나타납니다." })}</section>`}
     ${group("more", "그 밖", more, main.length + 1, zoneName)}
     ${group("in_progress", "조치 중", prog, 1, zoneName)}
     ${group("done", "조치 완료", done, 1, zoneName)}`
     : (top ? hero(top, countRank.get(top.label) ?? 0, flipped && byCount[0] ? byCount[0] : null, heroSwap) : `
-    <section class="card"><p class="muted">아직 판정된 민원이 없습니다.</p></section>`)}
+    <section class="card">${stateBox({ icon: "inbox", title: "아직 접수된 민원이 없습니다", hint: "QR로 민원이 들어오면 잠시 뒤 유형과 우선순위가 여기에 정리됩니다." })}</section>`)}
 
     ${alerts.length ? `<ul class="alerts" aria-label="미확인 알림">${alerts.map((a) => { const fr = alertFresh.of(a.id); return `
       <li class="alert ${openAlerts.has(a.id) ? "open" : ""}${fr.cls}" style="${fr.style}" data-id="${a.id}">
@@ -158,7 +168,7 @@ export async function renderControl(root: HTMLElement): Promise<void> {
       ${hasIssues ? `
       <details class="card typerank" data-grp="rank" ${grpOpen.has("rank") ? "open" : ""}>
         <summary><span class="typerank-t">유형별 순위</span> <span class="muted small">카드 점수의 근거${top ? ` · ${hhmm(top.as_of)} 기준` : ""}</span></summary>
-        ${sev.length ? rankList(sev, 1) : `<p class="muted">아직 판정된 유형이 없습니다.</p>`}
+        ${sev.length ? rankList(sev, 1) : stateBox({ inline: true, icon: "inbox", title: "유형별 순위가 아직 없습니다", hint: "민원이 분류되면 나타납니다." })}
       </details>` : `
       <section class="card">
         <h2>그다음 순위 <span class="muted small">${top ? `${hhmm(top.as_of)} 기준 · 누르면 계산식` : ""}</span></h2>
@@ -166,15 +176,16 @@ export async function renderControl(root: HTMLElement): Promise<void> {
       </section>`}
 
       <section class="card">
-        <h2>실시간 유입 <span class="muted counts">누적 <b>${d.total}</b> · 분류 대기 <b>${d.pending}</b>${reviewCounts(d.review ?? 0, d.review_safety ?? 0, d.review_items !== undefined && (d.review ?? 0) > 0)}${d.deleted ? ` · 지운 민원 <b>${d.deleted}</b>` : ""}</span></h2>
+        <h2>실시간 유입 <span class="muted counts">누적 <b>${d.total}</b> · 분류 대기 <b>${d.pending}</b>${reviewCounts(d.review ?? 0, d.review_safety ?? 0, d.review_items !== undefined && (d.review ?? 0) > 0)}${deletedChip(d.deleted ?? 0)}</span></h2>
         ${d.review_items !== undefined && ((d.review ?? 0) > 0 || rvItems.length) ? rvPanel(rvItems, d.review ?? 0, zoneName) : ""}
+        ${(d.deleted ?? 0) > 0 || dlOpen ? dlPanel() : ""}
         <ul class="feed">${feed.map((f) => {
           const done = f.status === "done" && f.label;
           const review = f.status === "review";   // 근거 없거나 신뢰도가 낮아 유형을 못 정한 민원 — 운영자가 봐야 한다
           const fr = feedFresh.of(f.id);
           return `<li class="${openFeed.has(f.id) ? "open" : ""}${fr.cls}" style="${fr.style}" data-id="${f.id}" data-fid="${f.id}">
             <button type="button" class="feed-item" title="${esc(f.raw_text)}">
-              <span class="feed-text">${esc(f.raw_text)}</span>
+              <span class="feed-text" id="ft-${f.id}">${esc(f.raw_text)}</span>
               <span class="meta">
                 <span class="tag ${done ? "" : review ? "review" : f.status === "dismissed" ? "none" : "wait"}">${done ? typeChip(f.label!, true) : review ? "확인 필요" : f.status === "dismissed" ? "유형 없음" : "분류 중"}</span>
                 ${f.receipt_no ? `<span class="rcpt" title="방문객 접수번호">W-${f.receipt_no}</span>` : ""}
@@ -182,8 +193,8 @@ export async function renderControl(root: HTMLElement): Promise<void> {
                 <span>${hhmm(f.ingested_at)}</span>
               </span>
             </button>
-            ${delButton(f.id)}</li>`;
-        }).join("") || `<li class="muted">접수된 민원이 없습니다.</li>`}</ul>
+            ${delButton(f.id, `ft-${f.id}`)}</li>`;
+        }).join("") || `<li class="state-li">${stateBox({ inline: true, icon: "inbox", title: "아직 접수된 민원이 없습니다", hint: "QR로 접수되면 여기에 나타납니다." })}</li>`}</ul>
       </section>
     </div>`;
 
@@ -272,6 +283,12 @@ export async function renderControl(root: HTMLElement): Promise<void> {
     }));
   root.querySelectorAll<HTMLButtonElement>("[data-dismiss]").forEach((btn) =>
     btn.addEventListener("click", () => void processReview(Number(btn.dataset.dismiss), "dismiss")));
+
+  // ── 지운 민원 목록 (D5-42)
+  root.querySelector<HTMLButtonElement>("[data-dl-toggle]")?.addEventListener("click", () => void toggleDeleted(root));
+  wireDeletedPanel(root);
+  // 열려 있는 동안 서버의 지운 개수가 바뀌면(내가 또 지웠거나 다른 운영자가 처리) 목록도 새로 가져온다
+  if (dlOpen && dlItems && deletedNow !== dlCount && !dlRefreshing) void refreshDeleted(root);
 
   // 순위·유입이 옮겨진 만큼만 미끄러지고, 점수 막대는 바뀐 만큼만 채워진다
   flipPlay(root, ".rank li", "label", snapRank);
@@ -388,9 +405,122 @@ function rvPanel(items: ReviewItem[], total: number, zoneName: Map<number, strin
                 <button type="button" class="btn" data-del="${it.id}" aria-label="민원 지우기">지우기</button>
               </div>
             </li>`;
-          }).join("")}</ul>` : `<p class="muted rvp-empty">처리할 확인 필요 민원이 없습니다.</p>`}
+          }).join("")}</ul>` : `<div class="rvp-empty">${stateBox({ inline: true, icon: "check", title: "확인이 필요한 민원이 없습니다", hint: "모두 처리했습니다." })}</div>`}
           ${rest > 0 ? `<p class="muted small rvp-more">그 밖 ${rest}건은 위 항목을 처리하면 이어서 나옵니다.</p>` : ""}
         </section>`;
+}
+
+/** 유입 제목 옆 '지운 민원 N' — 누르면 지운 민원 목록이 열린다 (D5-42). 목록이 열려 있으면 0건이 되어도 버튼을 남겨 닫을 수 있게 한다. */
+function deletedChip(n: number): string {
+  if (n <= 0 && !dlOpen) return "";
+  return ` · <button type="button" class="dl-btn${dlOpen ? " open" : ""}" data-dl-toggle aria-expanded="${dlOpen}" aria-controls="dlp" title="눌러서 지운 민원을 보고 되돌립니다">지운 민원 <b>${n}</b></button>`;
+}
+
+/** 지운 시각 표시: 오늘이면 시:분, 아니면 월-일 시:분 */
+function whenText(iso: string): string {
+  const t = String(iso ?? "").replace("T", " ");
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return t.startsWith(today) ? t.slice(11, 16) : `${t.slice(5, 10)} ${t.slice(11, 16)}`;
+}
+
+/** 지운 민원 패널: 최근 지운 것부터, 행마다 원문(마스킹됨) · 구역 · 지운 시각 · 원래 유형 + [되돌리기]. 운영자 코드가 필요한 목록이라 열 때 코드 창이 뜰 수 있다. */
+function dlPanel(): string {
+  const items = dlItems;
+  return `
+        <section class="rvp dlp" id="dlp" aria-label="지운 민원" ${dlOpen ? "" : "hidden"}>
+          <div class="rvp-head">
+            <p class="rvp-t"><b>지운 민원${items ? ` ${items.length}건` : ""}</b> <span class="muted small">최근 지운 것부터 · 되돌리면 유입과 집계에 다시 들어갑니다</span></p>
+            <button type="button" class="linkbtn" data-dl-close>접기</button>
+          </div>
+          ${items === null ? `<p class="muted rvp-empty" role="status">불러오는 중…</p>`
+            : items.length ? `<ul class="rvlist">${items.map((it) => `
+            <li class="rvi dli" data-did="${it.id}">
+              <div class="rvi-meta">
+                <span class="ty">${uiIcon("pin")}<span>${esc(it.zone || "구역 미상")}</span></span>
+                <span>지운 시각 ${esc(whenText(it.deleted_at))}</span>
+                ${it.label ? typeChip(it.label, true) : it.status === "review" ? `<span class="tag review">확인 필요</span>` : it.status === "dismissed" ? `<span class="tag none">유형 없음</span>` : ""}
+              </div>
+              <p class="rvi-text" id="dt-${it.id}">${esc(it.raw_text)}</p>
+              <div class="rvi-acts"><button type="button" class="btn" data-restore="${it.id}" aria-describedby="dt-${it.id}">되돌리기</button></div>
+            </li>`).join("")}</ul>`
+            : `<div class="rvp-empty">${stateBox({ inline: true, icon: "check", title: "지운 민원이 없습니다", hint: "지운 민원이 생기면 여기에서 되돌릴 수 있습니다." })}</div>`}
+        </section>`;
+}
+
+/** 패널의 열림 상태만 화면에 맞춘다 (다시 그리지 않는다). */
+function syncDeleted(root: HTMLElement): void {
+  const box = root.querySelector<HTMLElement>("#dlp");
+  const btn = root.querySelector<HTMLElement>("[data-dl-toggle]");
+  if (box) box.hidden = !dlOpen;
+  btn?.setAttribute("aria-expanded", String(dlOpen));
+  btn?.classList.toggle("open", dlOpen);
+}
+
+/** 패널 안의 버튼(접기 · 되돌리기) 연결. 패널만 다시 그린 뒤에도 부른다. */
+function wireDeletedPanel(root: HTMLElement): void {
+  root.querySelector<HTMLButtonElement>("[data-dl-close]")?.addEventListener("click", () => {
+    dlOpen = false;
+    syncDeleted(root);
+    root.querySelector<HTMLElement>("[data-dl-toggle]")?.focus();
+  });
+  root.querySelectorAll<HTMLButtonElement>("[data-restore]").forEach((b) =>
+    b.addEventListener("click", () => void restoreOne(root, Number(b.dataset.restore))));
+}
+
+/** 패널만 다시 그린다 (유입·카드는 그대로). */
+function paintDeleted(root: HTMLElement): void {
+  const box = root.querySelector<HTMLElement>("#dlp");
+  if (!box) return;
+  const tmp = document.createElement("div");
+  tmp.innerHTML = dlPanel();
+  box.replaceWith(tmp.firstElementChild!);
+  wireDeletedPanel(root);
+}
+
+async function toggleDeleted(root: HTMLElement): Promise<void> {
+  if (dlOpen) { dlOpen = false; syncDeleted(root); return; }
+  // 열기: 목록을 가져온다. 운영자 코드가 없으면 코드 창이 뜨고, 취소하거나 실패하면 열지 않는다.
+  try {
+    dlItems = await api.listDeleted();
+  } catch (e) {
+    toast((e as Error).message, "warn");
+    return;
+  }
+  dlCount = deletedNow;
+  dlOpen = true;
+  paintDeleted(root);
+  syncDeleted(root);
+  const box = root.querySelector<HTMLElement>("#dlp");
+  if (box) pop(box);
+}
+
+async function refreshDeleted(root: HTMLElement): Promise<void> {
+  if (!storedCode()) return;            // 코드를 아직 안 넣었으면 묻지 않는다 (열 때 이미 입력했을 것)
+  dlRefreshing = true;
+  try {
+    dlItems = await api.listDeleted();
+    dlCount = deletedNow;
+    paintDeleted(root);
+    syncDeleted(root);
+  } catch { /* 다음 갱신 때 다시 시도 */ } finally { dlRefreshing = false; }
+}
+
+/** 지운 민원 하나를 되돌린다 — 유입·집계·카드에 다시 들어간다. */
+async function restoreOne(root: HTMLElement, id: number): Promise<void> {
+  try {
+    await api.restoreFeedback(id);
+  } catch (e) {
+    toast((e as Error).message, "warn");
+    return;
+  }
+  hidden.delete(id);
+  feedFresh.forget(id);
+  dlItems = (dlItems ?? []).filter((i) => i.id !== id);
+  paintDeleted(root);
+  syncDeleted(root);
+  toast("민원을 되돌렸습니다");
+  if (lastRoot) void renderControl(lastRoot);
 }
 
 /** 접이식 묶음(그 밖 · 조치 중 · 조치 완료). 비어 있으면 그리지 않는다. */
@@ -414,7 +544,7 @@ function issueCard(c: Card, no: number, big: boolean, zoneName: Map<number, stri
   const zone = c.zone_name ?? (c.zone_id != null ? zoneName.get(c.zone_id) : null) ?? "구역 미상";
   const st = c.action_status;
   const stText = st ? (STATUS_LABEL[st] ?? st) : "요청서 없음";
-  const srcText = c.text_source === "llm" ? "AI 정리" : c.text_source === "local" ? "기본 문구(local 대역)" : "기본 문구";
+  const srcText = c.text_source === "llm" ? "AI 정리" : "기본 문구";
   // 결과가 큰 조치(대피·중단·통제 등)는 일반 조치와 섞지 않고 별도 칸에 둔다. 서버가 조치마다 표시를 주면 그것을, 아니면 카드 표시 + 말로 가린다.
   const isRisky = (a: { text: string; needs_judgment?: number }) => !!a.needs_judgment || (!!c.needs_judgment && ESCALATION.test(a.text));
   const normal = c.actions.filter((a) => !isRisky(a));
@@ -428,7 +558,8 @@ function issueCard(c: Card, no: number, big: boolean, zoneName: Map<number, stri
   const actLi = (a: IssueAction) => `
           <li><span class="ic-act">${esc(a.text)}</span>${a.quote_id != null ? `<span class="ic-ref" title="이 조치의 근거가 된 민원">근거 #${a.quote_id}</span>` : ""}</li>`;
   // 인용은 원문 그대로 보여 주되(글자를 바꾸지 않는다) 줄바꿈 없이 한 줄로 잘라 보인다. 전체는 title 로.
-  const quoteLi = (q: Quote, del: boolean) => `<li${del ? ` data-fid="${q.id}"` : ""}><span class="qt" title="${esc(q.text)}">“${esc(q.text)}”</span><span class="muted small qm">${del ? "" : `#${q.id} · `}${hhmm(q.posted_at)}</span>${del ? delButton(q.id) : ""}</li>`;
+  const cardId = c.id;
+  const quoteLi = (q: Quote, del: boolean) => `<li${del ? ` data-fid="${q.id}"` : ""}><span class="qt"${del ? ` id="cq-${cardId}-${q.id}"` : ""} title="${esc(q.text)}">“${esc(q.text)}”</span><span class="muted small qm">${del ? "" : `#${q.id} · `}${hhmm(q.posted_at)}</span>${del ? delButton(q.id, `cq-${cardId}-${q.id}`) : ""}</li>`;
   const meta = `
         <span class="ic-meta">
           <span class="ty ic-zone">${uiIcon("pin")}<span>${esc(zone)}</span></span>
@@ -440,7 +571,7 @@ function issueCard(c: Card, no: number, big: boolean, zoneName: Map<number, stri
   const body = `
       <div class="ic-body">
         <h3 class="ic-h">해야 할 일</h3>
-        <ol class="ic-acts">${normal.map(actLi).join("") || `<li class="muted">${risky.length ? "일반 조치는 없고, 아래 판단이 필요한 조치만 있습니다." : "아직 정리된 조치가 없습니다."}</li>`}</ol>
+        <ol class="ic-acts">${normal.map(actLi).join("") || `<li class="muted">${risky.length ? "일반 조치는 없고, 아래 판단이 필요한 조치만 있습니다." : "해야 할 일을 정리하는 중입니다. 잠시 후 표시됩니다."}</li>`}</ol>
         ${risky.length ? `
         <div class="ic-risk" role="group" aria-label="운영자 판단 필요">
           <p class="ic-risk-t"><span aria-hidden="true">⚠</span> 운영자 판단 필요 — 실행 전 현장 확인</p>
@@ -450,11 +581,11 @@ function issueCard(c: Card, no: number, big: boolean, zoneName: Map<number, stri
         <div class="ic-quotes">
           <section class="ic-q" aria-label="판단 근거">
             <h4 class="ic-h2">판단 근거 <span class="muted small">문구가 바뀔 때만 바뀜</span></h4>
-            <ul>${c.evidence.map((q) => quoteLi(q, false)).join("") || `<li class="muted">-</li>`}</ul>
+            <ul>${c.evidence.map((q) => quoteLi(q, false)).join("") || `<li class="muted">아직 없음</li>`}</ul>
           </section>
           <section class="ic-q" aria-label="최신 민원">
             <h4 class="ic-h2">최신 민원 <span class="muted small">실시간</span></h4>
-            <ul>${c.latest.map((q) => quoteLi(q, true)).join("") || `<li class="muted">-</li>`}</ul>
+            <ul>${c.latest.map((q) => quoteLi(q, true)).join("") || `<li class="muted">아직 없음</li>`}</ul>
           </section>
         </div>
         <div class="ic-actions">

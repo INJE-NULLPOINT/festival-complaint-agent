@@ -108,11 +108,13 @@ python scripts/seed_festival.py --pick 유등    # 대상 축제 설정
 
 테스트:
 ```bash
-python tests/test_severity.py        # 심각도 엔진 단위 9건
-python tests/test_scenarios.py       # 대표 Test Case 5종 (제출 필수)
-python tests/test_scenarios.py --live  # 실제 LLM 호출 포함
+python scripts/final_check.py        # 전부 한 번에 (약 7분, LLM 호출 없음) → tests/final_check.md 에 표 1장
 ```
-`tests/testcase_report.md`가 생성됩니다. **이게 제출용 테스트 증거입니다.**
+순서: 단위(`tests/test_severity.py`) → 시나리오 5종(`tests/test_scenarios.py`) → Streamlit(`tests/streamlit_check.py --backend local`) →
+웹 타입 검사(tsc) → 화면·서버 전체(`tests/ui/run_all.mjs`: 방문객·관리자·연결 끊김·속도·보안·모바일·빌드본) → 제출물 제외 확인(.env·*.db·키 등이 git 에 없는지).
+운영 DB 는 쓰지 않고(시험마다 복사본·별도 포트), 제출용 기록(`testcase_report.md`·`streamlit_check.md`)은 끝나면 원래 내용으로 돌려놓습니다.
+일부만: `--only=unit,tsc` · `--skip=ui`. 개별 시험·실제 LLM 호출(`python tests/test_scenarios.py --live`)은 필요할 때 따로 돌립니다 —
+`tests/testcase_report.md` 가 **제출용 테스트 증거**입니다. 화면 시험 상세는 `tests/ui/README.md`.
 
 ---
 

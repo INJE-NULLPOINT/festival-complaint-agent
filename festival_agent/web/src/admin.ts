@@ -63,7 +63,7 @@ function unlock(verify: Verify, notice: string): Promise<Outcome> {
     overlay.innerHTML = `
       <form class="adm-modal" role="dialog" aria-modal="true" aria-labelledby="adm-t" aria-describedby="adm-d" novalidate>
         <h2 id="adm-t" class="adm-title">운영자 코드</h2>
-        <p id="adm-d" class="adm-desc">민원 지우기 · 조치 상태 변경 · 조치요청서 생성은 운영자만 할 수 있습니다. 코드를 입력해 주세요.</p>
+        <p id="adm-d" class="adm-desc">민원 지우기 · 확인 필요 처리 · 조치 상태 변경 · 조치요청서 생성은 운영자만 할 수 있습니다. 코드를 입력해 주세요.</p>
         <p class="adm-err" role="alert" hidden></p>
         <label class="adm-lab" for="adm-code">코드</label>
         <div class="adm-field">
@@ -124,7 +124,7 @@ function unlock(verify: Verify, notice: string): Promise<Outcome> {
         else if (x instanceof AdminDenied) {          // 잠김 · 서버 미설정: 다시 입력해도 소용없다
           terminal = x; show(x.kind === "locked" ? MSG.locked : MSG.unset);
           input.disabled = true; eye.disabled = true; ok.textContent = "닫기"; ok.focus();
-        } else show(`확인하지 못했습니다: ${(x as Error).message}`);   // 서버에 닿지 않음 등
+        } else { console.error(x); show("서버에 연결할 수 없습니다. 잠시 뒤 다시 시도해 주세요"); }   // 서버에 닿지 않음 등 — 원문 오류는 화면에 내지 않는다
       }
     });
     // Esc 로 취소 · Tab 이 창 밖으로 새지 않게

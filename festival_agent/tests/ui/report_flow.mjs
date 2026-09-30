@@ -1,25 +1,12 @@
 // 방문객 접수 흐름: 미리 선택 → 응급 박스 없음 → 빈 내용 막기 → 실패 시 오류(모달 없음) → 접수 → 완료 모달(포커스·Esc·닫기·한 건 더, 구역 유지). 사용: node report_flow.mjs <base> [--nodialog]   (--nodialog: <dialog>/showModal 이 없는 브라우저 흉내 → 고정 div 오버레이 경로 점검)
-import { quitChrome } from "./chrome_util.mjs";
-import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { openChrome, quitChrome } from "./lib.mjs";
 
 const base = process.argv[2];
 const noDialog = process.argv.includes("--nodialog");
-const port = 9900 + Math.floor(Math.random() * 90);
-const chrome = spawn("C:/Program Files/Google/Chrome/Application/chrome.exe", ["--headless=new", "--disable-gpu",
-  `--user-data-dir=${mkdtempSync(join(tmpdir(), "rf-"))}`, `--remote-debugging-port=${port}`, "about:blank"], { stdio: "ignore" });
 // 기계가 바쁘면 화면이 늦게 반응한다 — run_all 이 CPU 사용률로 정한 배율(UI_SLOW 1~3)만큼 기다리는 시간만 늘린다 (검사 기준은 그대로)
 const SLOW = Math.max(1, Number(process.env.UI_SLOW) || 1);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms * SLOW));
-let t; for (let i = 0; i < 50; i++) { try { t = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); break; } catch { await sleep(200); } }
-const ws = new WebSocket(t.find((x) => x.type === "page").webSocketDebuggerUrl);
-await new Promise((r) => ws.addEventListener("open", r));
-let id = 0; const P = new Map();
-ws.addEventListener("message", (e) => { const m = JSON.parse(e.data); if (m.id && P.has(m.id)) { P.get(m.id)(m.result); P.delete(m.id); } });
-const send = (method, params = {}) => new Promise((r) => { const n = ++id; P.set(n, r); ws.send(JSON.stringify({ id: n, method, params })); });
-const ev = async (x) => (await send("Runtime.evaluate", { expression: x, returnByValue: true, awaitPromise: true })).result.value;
+const { chrome, ws, send, ev } = await openChrome({ prefix: "rf-" });
 let ok = true;
 const check = (name, cond, detail = "") => { ok &&= !!cond; console.log(`${cond ? "✓" : "✗"} ${name}${detail ? "  — " + detail : ""}`); };
 
@@ -34,7 +21,7 @@ check("?zone=유등터널 미리 선택", (await ev(`document.querySelector("sel
 check("머리글 = 축제 이름", (await ev(`document.querySelector(".brand strong").textContent`)) !== "축제 민원 관제",
   await ev(`document.querySelector(".brand strong").textContent`));
 check("응급 박스 없음 (제출 전 화면에 119/112 박스·전화 링크 없음)", (await ev(`document.querySelectorAll(".rp-sos, a[href^='tel:']").length`)) === 0);
-check("FAQ 4문항 (사진 문항 없음)", (await ev(`document.querySelectorAll(".rp-faq details").length`)) === 4 &&
+check("FAQ 5문항 (접속 기록 문항 포함, 사진 문항 없음)", (await ev(`document.querySelectorAll(".rp-faq details").length`)) === 5 &&
   !(await ev(`document.querySelector(".rp-faq").textContent.includes("사진")`)));
 check("이름·연락처 입력칸 없음", (await ev(`document.querySelectorAll("input").length`)) === 0);
 

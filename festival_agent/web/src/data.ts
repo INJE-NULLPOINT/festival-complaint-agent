@@ -72,6 +72,8 @@ export type ControlData = {
   backend_llm?: "claude_code" | "anthropic" | "local" | string;
   /** 집계 창 안의 합성·재생(replay/demo/dev) 민원. on=false 면 배지를 숨긴다. */
   synthetic?: { on: boolean; count: number };
+  /** 한 구역에 접수가 몰림 (D5-33 ③) — 차단이 아니라 표시만. 서버(webapi)만 준다. 없거나 빈 배열이면 표시 없음. */
+  crowding?: { zone_id: number; zone: string; count: number; window_sec: number }[];
 };
 /** 운영자가 지운(숨긴) 민원 — 되돌리기용 목록의 한 줄 (D5-42). 원문은 접수 때 이미 마스킹된 것. */
 export type DeletedItem = {
@@ -126,14 +128,14 @@ const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 export const api: Backend = gateAdmin(url && key ? supabaseBackend(url, key) : localBackend());
 
 // 헤더 배지 (D5-33): 관제 데이터를 읽을 때마다 그 안의 backend_llm · synthetic 만 헤더에 알린다 (control.ts 는 건드리지 않는다).
-export type HeaderMeta = Pick<ControlData, "backend_llm" | "synthetic">;
+export type HeaderMeta = Pick<ControlData, "backend_llm" | "synthetic" | "crowding">;
 let metaFn: ((m: HeaderMeta) => void) | null = null;
 export function onHeaderMeta(fn: (m: HeaderMeta) => void): void { metaFn = fn; }
 {
   const rawControl = api.control.bind(api);
   api.control = async () => {
     const d = await rawControl();
-    try { metaFn?.({ backend_llm: d.backend_llm, synthetic: d.synthetic }); } catch { /* 배지 실패가 관제 화면을 막지 않게 */ }
+    try { metaFn?.({ backend_llm: d.backend_llm, synthetic: d.synthetic, crowding: d.crowding }); } catch { /* 배지 실패가 관제 화면을 막지 않게 */ }
     return d;
   };
 }

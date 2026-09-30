@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from core import config, db, issues, tourapi
+from core import config, db, issues
 from core.llm import Agent, tool
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "output"
@@ -26,22 +26,17 @@ def _safe(name: str) -> str:
 
 SYSTEM = """너는 지역 축제 운영 관제 시스템의 '조치 에이전트'다.
 
-역할: 심각도가 높은 민원 유형에 대해, 담당 부서가 받아서 바로 움직일 수 있는
-조치요청서를 만든다.
+역할: 심각도가 높은 민원 유형에 대해, 담당 부서가 받아서 바로 움직일 수 있는 조치요청서를 만든다.
 
 절차
 1. get_department 로 담당 부서를 확인한다.
 2. collect_quotes 로 해당 유형의 민원 원문을 가져온다.
-3. 그중 **대표성 있는 5건 이내**를 직접 고른다. 고르는 기준:
-   - 서로 다른 구역의 사례를 섞는다 (한 구역에 몰리지 않게)
-   - 구체적 상황이 드러난 문장을 고른다 ("불편함" 같은 모호한 것은 제외)
-   - 안전 관련이면 위험 상황이 명확한 것을 우선한다
-4. lookup_festival_info 로 축제 공식 정보를 조회해 문서 머리말에 넣는다.
-   조회에 실패하면(null) 축제명만 쓰고 넘어간다. 없는 정보를 지어내지 마라.
-5. 조치 제안을 쓴다. **현장에서 오늘 실행 가능한 것만** 쓴다.
-   예산 편성, 조례 개정 같은 장기 과제는 쓰지 않는다.
-   요청문에 '관제 카드의 조치'가 주어지면 그 문장을 그대로(문장·순서 유지) 제안으로 쓴다.
-   관제 화면과 요청서의 조치가 서로 다르면 안 된다. 주어지지 않았을 때만 2~3개를 직접 쓴다.
+3. 그중 **대표성 있는 5건 이내**를 직접 고른다. 기준: 서로 다른 구역의 사례를 섞는다 / 구체적 상황이 드러난 문장
+   ("불편함" 같은 모호한 것은 제외) / 안전 관련이면 위험 상황이 명확한 것을 우선한다.
+4. lookup_festival_info 로 축제 공식 정보를 조회해 문서 머리말에 넣는다. 실패하면(null) 축제명만 쓰고, 없는 정보를 지어내지 마라.
+5. 조치 제안을 쓴다. **현장에서 오늘 실행 가능한 것만** 쓴다 (예산 편성·조례 개정 같은 장기 과제는 쓰지 않는다).
+   요청문에 '관제 카드의 조치'가 주어지면 그 문장을 그대로(문장·순서 유지) 제안으로 쓴다 — 관제 화면과 요청서의 조치가
+   다르면 안 된다. 주어지지 않았을 때만 2~3개를 직접 쓴다.
 6. generate_doc 으로 문서를 만들고, 무엇을 만들었는지 한 문장으로 보고한다.
 
 반드시 지킬 것
@@ -137,8 +132,9 @@ def generate_doc(label: str, department: str, count: int, score: float,
         fest = conn.execute("SELECT name FROM festival LIMIT 1").fetchone()
     head = doc.add_paragraph()
     head.add_run(f"{fest['name'] if fest else ''}\n").bold = True
-    head.add_run(f"수신: {department}\n")
-    head.add_run(f"작성: 실시간 민원 관제 AI Agent\n")
+    contact = config.DEPARTMENT_MAP.get(label, ("", "-"))[1]          # 연락처는 모델이 아니라 매핑표에서 채운다
+    head.add_run(f"수신: {department}" + (f" ({contact})" if contact and contact != "-" else "") + "\n")
+    head.add_run("작성: 실시간 민원 관제 AI Agent\n")
     head.add_run(f"일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
     if festival_info:
         head.add_run(f"{festival_info}\n").italic = True
@@ -184,7 +180,7 @@ def generate_doc(label: str, department: str, count: int, score: float,
     # 웹 화면이 DOCX 를 열지 않고도 같은 내용을 미리 볼 수 있게 한 벌 더 남긴다.
     preview = {
         "festival": fest["name"] if fest else "",
-        "department": department,
+        "department": department, "contact": contact,
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "festival_info": festival_info,
         "label": label, "label_ko": korean, "count": count,

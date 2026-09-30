@@ -363,15 +363,6 @@ def _migrate_sqlite(conn) -> None:
     for col in ("suggested_label", "reviewed_at", "review_action", "decided_by"):
         if col not in have:
             conn.execute(f"ALTER TABLE classification ADD COLUMN {col} TEXT")
-    if "suggested_label" not in have:
-        # 열이 생기기 전에 review 로 들어간 건은 agent_note 의 '모델 제안: 유형' 에서 한 번만 옮겨 채운다 (1회성 이전)
-        import re
-        for r in conn.execute("SELECT feedback_id, agent_note FROM classification "
-                              "WHERE status='review' AND agent_note LIKE '%모델 제안:%'").fetchall():
-            m = re.search(r"모델 제안:\s*(\w+)", r["agent_note"] or "")
-            if m and m.group(1) in config.LABELS:
-                conn.execute("UPDATE classification SET suggested_label=? WHERE feedback_id=?",
-                             (m.group(1), r["feedback_id"]))
     have = {r["name"] for r in conn.execute("PRAGMA table_info(feedback)")}
     if "deleted_at" not in have:
         conn.execute("ALTER TABLE feedback ADD COLUMN deleted_at TEXT")
@@ -681,7 +672,6 @@ def recent_logs(limit: int = 20) -> list:
 
 # 조치요청서 상태: requested → in_progress → done (사람이 고름)
 # superseded = 같은 유형의 새 요청서로 대체됨. 시스템만 쓰고, 열린 요청으로 세지 않는다.
-OPEN_STATUSES = ("requested", "in_progress")
 OPEN_ACTION_SQL = "status IN ('requested','in_progress')"
 
 
@@ -739,12 +729,6 @@ def cache_get(digest: str) -> dict | None:
             "SELECT result FROM classify_cache WHERE hash=?", (digest,)
         ).fetchone()
     return json.loads(row["result"]) if row else None
-
-
-def cache_delete(digest: str) -> None:
-    with connect() as conn:
-        conn.execute("DELETE FROM classify_cache WHERE hash=?", (digest,))
-        conn.commit()
 
 
 def cache_put(digest: str, result: dict) -> None:

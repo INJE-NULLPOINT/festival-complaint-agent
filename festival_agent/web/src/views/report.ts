@@ -4,7 +4,7 @@
 // 모양은 흑백 결제 화면 느낌 (제출_준비/stitch/reference_bw_checkout.png). 스타일은 style.css 의 .rp · body.visitor 에만.
 // 접수하면 화면을 바꾸지 않고 <dialog> 모달로 완료를 띄운다 (D5-24). 응급 안내는 모달 맨 아래 한 줄만.
 import { api, zones, type Zone } from "../data";
-import { esc, reduced, typeIcon } from "../ui";
+import { esc, reduced, stateBox, typeIcon } from "../ui";
 
 const MAX = 500;
 
@@ -21,16 +21,17 @@ const EXAMPLES: [string, string, string][] = [
 // 사진 첨부는 이번 제출에서 뺐다 — 사진 관련 UI·FAQ 문항을 넣지 않는다
 const FAQ: [string, string][] = [
   ["이름이나 연락처를 적어야 하나요?", "아니요. 묻지 않습니다."],
-  ["제 개인정보가 남나요?", "이름·연락처는 묻지 않습니다. 실수로 전화번호나 이메일을 적어도, 저장할 때 자동으로 가려지고 접수 원문은 처리 직후 지워집니다."],
-  ["답변을 받을 수 있나요?", "연락처를 받지 않아 개별 답변은 드리지 못합니다. 담당 부서로 바로 전달됩니다."],
-  ["같은 내용을 여러 번 신고해도 되나요?", "괜찮습니다. 같은 불편을 겪은 분이 많을수록 더 빨리 조치됩니다."],
+  ["제 개인정보가 남나요?", "이름·연락처는 묻지 않습니다. 정해진 형식의 전화번호·이메일은 자동으로 가려집니다. 이름·주소는 적지 말아 주세요."],
+  ["답변을 받을 수 있나요?", "연락처를 받지 않아 개별 답변은 드리지 못합니다. 관제에 바로 올라가 담당자가 확인합니다."],
+  ["같은 내용을 여러 번 신고해도 되나요?", "괜찮습니다. 같은 불편을 겪은 분이 많을수록 더 먼저 살펴봅니다. 다만 같은 구역에서 똑같은 글이 2분 안에 다시 들어오면 한 건으로 합쳐집니다."],
+  ["접속 기록이 남나요?", "장난 신고를 막기 위해 접속 주소를 알아볼 수 없는 값으로 바꿔 쓰고, 24시간이 지나면 지웁니다. 원래 주소는 저장하지 않고, 신고 내용과도 연결하지 않습니다."],
 ];
 
 // 신고 뒤에 일어나는 일 — 이용자 설명서 '신고하신 내용은 어떻게 되나요'
 const NEXT: [string, string][] = [
   ["분류", "잠시 후 어떤 불편인지 나뉩니다"],
   ["판단", "얼마나 급한 일인지 판단합니다. 안전은 가장 먼저"],
-  ["전달", "담당 부서로 바로 넘어가 현장에서 조치합니다"],
+  ["전달", "관제에 바로 올라가 담당자가 확인합니다"],
 ];
 
 const ico = (d: string) => `<svg class="rp-ico" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
@@ -56,13 +57,22 @@ function presetZone(zs: Zone[]): number | null {
 
 export async function renderReport(root: HTMLElement): Promise<void> {
   const zs = await zones();
+  // 구역 목록이 비어 있으면(서버 설정 전이거나 불러오기 실패) 접수 양식을 보여 줘도 보낼 수 없다 — 이유를 알리고 다시 열어 보게 한다 (D5-39)
+  if (!zs.length) {
+    root.innerHTML = `
+    <section class="card narrow rp">
+      <h1>불편 신고</h1>
+      ${stateBox({ kind: "error", icon: "alert", title: "지금은 접수할 수 없습니다", hint: "접수할 구역 정보를 불러오지 못했습니다. 잠시 뒤 다시 열어 주세요. 급한 일은 119(응급·화재) 또는 112(사건·사고)로 연락하세요." })}
+    </section>`;
+    return;
+  }
   const preset = presetZone(zs);
   const zoneName = (id: number) => zs.find((z) => z.id === id)?.name ?? "";
 
   root.innerHTML = `
     <section class="card narrow rp">
       <h1>불편 신고</h1>
-      <p class="rp-lead">운영본부에 바로 전달됩니다. 이름이나 연락처는 적지 않아도 됩니다.</p>
+      <p class="rp-lead">관제에 바로 올라가 담당자가 확인합니다. 이름이나 연락처는 적지 않아도 됩니다.</p>
 
       <form id="rf" class="form rp-form" novalidate>
         <!-- 구역: 행 모양. 투명한 select 가 행 전체를 덮어 누르면 폰 기본 선택창이 열린다 -->
@@ -80,11 +90,12 @@ export async function renderReport(root: HTMLElement): Promise<void> {
         </label>
 
         <label class="rp-field">
-          <span class="rp-sec">무엇이 불편했나요? <span class="rp-count" aria-live="polite"><b id="rcount">0</b>/${MAX}</span></span>
+          <span class="rp-sec">무엇이 불편했나요? <span class="rp-count"><b id="rcount">0</b>/${MAX}</span></span>
           <textarea name="text" rows="5" maxlength="${MAX}" required
             placeholder="예) 유등터널 입구에 사람이 너무 몰려서 밀려요"></textarea>
         </label>
-        <p class="rp-hint">${LOCK}<span>전화번호나 이메일을 적어도 저장 전에 자동으로 지워집니다.</span></p>
+        <span class="sr-only" id="rlive" role="status" aria-live="polite"></span>
+        <p class="rp-hint">${LOCK}<span>정해진 형식의 전화번호·이메일은 자동으로 가려집니다. 이름·주소는 적지 말아 주세요.</span></p>
 
         <div class="rp-bar">
           <p class="err" id="rerr" role="alert" hidden></p>
@@ -97,7 +108,7 @@ export async function renderReport(root: HTMLElement): Promise<void> {
         <ul>${EXAMPLES.map(([g, k, v], i) => `
           <li class="rp-row ${i === 0 ? "safe" : ""}">
             <span class="rp-glyph" aria-hidden="true">${typeIcon(g)}</span>
-            <span class="rp-row-text"><b>${esc(k)}${i === 0 ? ` <em>가장 먼저 처리</em>` : ""}</b><span>${esc(v)}</span></span>
+            <span class="rp-row-text"><b>${esc(k)}${i === 0 ? ` <em>가장 먼저 살펴봄</em>` : ""}</b><span>${esc(v)}</span></span>
           </li>`).join("")}</ul>
       </section>
 
@@ -114,7 +125,15 @@ export async function renderReport(root: HTMLElement): Promise<void> {
   const select = form.querySelector<HTMLSelectElement>("select")!;
   const text = form.querySelector<HTMLTextAreaElement>("textarea")!;
   const count = root.querySelector<HTMLElement>("#rcount")!;
-  text.addEventListener("input", () => { count.textContent = String(text.value.length); });
+  // 글자 수는 눈으로만 갱신한다(매 글자마다 스크린리더가 읽으면 방해). 450자부터 몇 번만 알린다 (D5-38)
+  const live = root.querySelector<HTMLElement>("#rlive")!;
+  text.addEventListener("input", () => {
+    const n = text.value.length;
+    count.textContent = String(n);
+    if (n < 450) live.textContent = "";
+    else if (n === 450 || n === 480 || n === 495) live.textContent = `${MAX}자 중 ${n}자 입력했습니다. ${MAX - n}자 남았습니다`;
+    else if (n >= MAX) live.textContent = `${MAX}자를 모두 썼습니다`;
+  });
   // 키보드 포커스일 때만 행에 테두리를 보인다 (:has 를 쓰지 않으려고 직접 처리. :focus-visible 이 없는 브라우저는 건너뛴다)
   const zoneRow = select.closest(".rp-zone")!;
   select.addEventListener("focus", () => {

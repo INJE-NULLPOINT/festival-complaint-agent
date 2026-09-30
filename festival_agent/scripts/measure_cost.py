@@ -119,7 +119,7 @@ def main() -> int:
         f"집계 범위: agent_log `{action}` 기록"
         + (f", {args.since} 이후" if args.since else " 전체") + f" ({first} ~ {last})",
         "",
-        f"| 에이전트 | 호출 | 입력 토큰 | 출력 토큰 | 캐시 읽기 | 평균 지연 | 비용(USD) | 호출 1회당 |"
+        "| 에이전트 | 호출 | 입력 토큰 | 출력 토큰 | 캐시 읽기 | 평균 지연 | 비용(USD) | 호출 1회당 |"
         + (" 민원 1건당 |" if n_done else ""),
         "|---|---|---|---|---|---|---|---|" + ("---|" if n_done else ""),
         *[f"| {r['agent']} | {r['calls']} | {r['i'] or 0:,} | {r['o'] or 0:,} | {r['c'] or 0:,} "

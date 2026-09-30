@@ -1,8 +1,6 @@
 // 폰 폭 점검: 가로 스크롤 · 넘친 요소 · 터치 영역 · 입력 글꼴. 사용: node mobile_check.mjs <base> <출력폴더> [접두어]
-import { quitChrome } from "./chrome_util.mjs";
-import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { openChrome, quitChrome } from "./lib.mjs";
+import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 const [base, outDir, prefix = ""] = process.argv.slice(2);
@@ -18,19 +16,8 @@ const VIEWS = [
   ["action-open", "/#action", ["[data-toggle]", "#toggle-old"]],
 ];
 
-const port = 9500 + Math.floor(Math.random() * 400);
-const chrome = spawn("C:/Program Files/Google/Chrome/Application/chrome.exe", [
-  "--headless=new", "--disable-gpu", "--no-first-run", `--user-data-dir=${mkdtempSync(join(tmpdir(), "mob-"))}`,
-  `--remote-debugging-port=${port}`, "about:blank"], { stdio: "ignore" });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-let targets;
-for (let i = 0; i < 50; i++) { try { targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); break; } catch { await sleep(200); } }
-const ws = new WebSocket(targets.find((t) => t.type === "page").webSocketDebuggerUrl);
-await new Promise((r) => ws.addEventListener("open", r));
-let id = 0; const pending = new Map();
-ws.addEventListener("message", (ev) => { const m = JSON.parse(ev.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m.result ?? m.error); pending.delete(m.id); } });
-const send = (method, params = {}) => new Promise((res) => { const n = ++id; pending.set(n, res); ws.send(JSON.stringify({ id: n, method, params })); });
-const evalJs = async (expr) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result?.value;
+const { chrome, ws, send, ev: evalJs } = await openChrome({ prefix: "mob-" });
 await send("Page.enable"); await send("Runtime.enable");
 
 const MEASURE = (W) => `(() => {

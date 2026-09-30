@@ -10,11 +10,7 @@
 //
 // 운영 DB 에 돌리지 말 것: 조치 상태를 바꿨다 되돌리고, 요청서 생성을 요청하고, 민원을 지웠다 되살린다.
 // (요청서 '생성' 자체는 워커가 하므로 여기서는 요청이 접수돼 대기 중으로 보이는 데까지만 본다.)
-import { quitChrome } from "./chrome_util.mjs";
-import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { openChrome, quitChrome } from "./lib.mjs";
 
 const base = (process.argv[2] ?? "").replace(/\/$/, "");
 const CODE = process.env.UI_ADMIN_CODE ?? "";
@@ -66,17 +62,7 @@ const sse = { events: [], ac: new AbortController() };
 const sseSince = (t, name) => sse.events.some((e) => e.t >= t && e.name === name);
 
 // ── 크롬 ──────────────────────────────────────────────────────────
-const port = 10000 + Math.floor(Math.random() * 500);
-const chrome = spawn("C:/Program Files/Google/Chrome/Application/chrome.exe", ["--headless=new", "--disable-gpu", "--no-first-run",
-  `--user-data-dir=${mkdtempSync(join(tmpdir(), "adm-"))}`, `--remote-debugging-port=${port}`, "--window-size=1280,900", "about:blank"], { stdio: "ignore" });
-let targets;
-for (let i = 0; i < 60; i++) { try { targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); break; } catch { await sleep(200); } }
-const ws = new WebSocket(targets.find((x) => x.type === "page").webSocketDebuggerUrl);
-await new Promise((r) => ws.addEventListener("open", r));
-let seq = 0; const waiting = new Map();
-ws.addEventListener("message", (e) => { const m = JSON.parse(e.data); if (m.id && waiting.has(m.id)) { waiting.get(m.id)(m.result); waiting.delete(m.id); } });
-const send = (method, params = {}) => new Promise((r) => { const n = ++seq; waiting.set(n, r); ws.send(JSON.stringify({ id: n, method, params })); });
-const ev = async (expr) => { const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }); return r?.result?.value; };
+const { chrome, ws, send, ev } = await openChrome({ prefix: "adm-", width: 1280, height: 900 });
 const go = async (hash) => {
   await send("Page.navigate", { url: `${base}/#${hash}` });
   await send("Page.reload");          // 같은 주소의 해시 이동은 다시 그리지 않을 수 있어 새로 연다
@@ -148,6 +134,7 @@ else {
     const modal = await until(() => exists(".adm-overlay"), 3000);
     check("코드 보호(화면): 처음 지우기를 누르면 코드 입력 창", !!modal && (await ev(`!!${q(".adm-modal")}.getAttribute("role") && document.activeElement?.id === "adm-code"`)), "입력칸에 포커스");
     check("코드 보호(화면): 코드를 넣기 전에는 지워지지 않음 (서버에 안 보냄)", (await get("/api/control")).total === total0 && (await visibleFid(id)) > 0);
+    check("코드 보호(화면): 창 설명에 '확인 필요 처리' 포함 (D5-38 문구)", await ev(`${q("#adm-d")}.textContent.includes("확인 필요 처리")`));
     check("코드 보호(화면): 입력 창은 가려진 입력(password)·16px 이상", await ev(`${q("#adm-code")}.type === "password" && parseFloat(getComputedStyle(${q("#adm-code")}).fontSize) >= 16`));
 
     await click(".adm-cancel"); await until(async () => !(await exists(".adm-overlay")), 2000);
@@ -204,12 +191,20 @@ console.log(`· 관제 화면 모양: ${cardMode ? "조치할 일 카드 (D5-29)
 check("관제: 화면이 그려지고 '실시간' 연결 표시", (await text("#live")).startsWith("실시간"), await text("#live"));
 { // 헤더 배지 (D5-33): 데이터 · AI 해석 방식 · 합성 표시. 값은 서버(/api/control)가 준 것과 맞아야 한다.
   const ctl = await get("/api/control");
-  const AI = { claude_code: "AI: Claude Code (개발용)", anthropic: "AI: Claude API", local: "AI: 규칙 대역" };
+  const AI = { claude_code: "AI: Claude Code (개발용)", anthropic: "AI: Claude API", local: "AI: 규칙(개발용)" };
   check("헤더: 데이터 배지에 '로컬 DB'", /로컬 DB/.test(await text("#live")), await text("#live"));
   const ai = await until(async () => (await text("#chip-ai")) || null, 4000);
   check("헤더: AI 배지가 서버 backend_llm 과 일치", ai === (AI[ctl.backend_llm] ?? `AI: ${ctl.backend_llm}`), `${ai} ← ${ctl.backend_llm}`);
   const synVisible = await ev(`!document.getElementById("chip-syn").hidden`);
   check("헤더: 합성 배지는 서버 synthetic.on 일 때만", synVisible === !!ctl.synthetic?.on, `화면 ${synVisible} · 서버 ${JSON.stringify(ctl.synthetic)}`);
+  // 접수 몰림 배지 (D5-33 ③): 서버 값에 맞춰 나오고, 값이 없으면 숨는다. 몰림을 일부러 만들면 접수 제한에 걸려 다른 점검이 깨지므로 응답만 바꿔치기한다.
+  const crowdNow = await ev(`!document.getElementById("chip-crowd").hidden`);
+  check("헤더: 접수 몰림 배지는 서버 crowding 이 있을 때만", crowdNow === ((ctl.crowding ?? []).length > 0), `화면 ${crowdNow} · 서버 ${JSON.stringify(ctl.crowding)}`);
+  await ev(`(() => { window.__f0 = window.fetch; window.fetch = async (u, o) => { const r = await window.__f0(u, o); if (!String(u).includes("/api/control")) return r; const j = await r.json(); j.data.crowding = [{ zone_id: 4, zone: "유등터널", count: 12, window_sec: 300 }, { zone_id: 5, zone: "소망등", count: 9, window_sec: 300 }]; return new Response(JSON.stringify(j), { status: 200, headers: { "Content-Type": "application/json" } }); }; window.dispatchEvent(new Event("hashchange")); })()`);
+  const crowdTxt = await until(async () => { const t = await text("#chip-crowd"); return (await ev(`!document.getElementById("chip-crowd").hidden`)) ? t : null; }, 5000);
+  check("헤더: 접수 몰림 배지 — 구역 · 건수/분 · 외 N곳", crowdTxt === "접수 몰림 · 유등터널 12건/5분 외 1곳", crowdTxt ?? "안 보임");
+  await ev(`window.fetch = window.__f0; window.dispatchEvent(new Event("hashchange"))`);
+  check("헤더: 몰림이 풀리면 배지가 사라짐", !!(await until(async () => (await ev(`document.getElementById("chip-crowd").hidden`)) === !((ctl.crowding ?? []).length > 0) ? true : null, 5000)));
   if (ctl.synthetic?.on) check("헤더: 합성 배지에 건수", (await text("#chip-syn")).includes(`${ctl.synthetic.count}건`), await text("#chip-syn"));
 }
 check("관제: 브리핑 카드 (지금 조치할 일)", (await text(".brief .brief-text")).length > 5 || (await exists(".brief .muted")), (await text(".brief .brief-text")).slice(0, 30));
@@ -421,7 +416,7 @@ else {
 }
 
 // 화면 수준 — 휴지통 버튼(aria-label '민원 지우기') → 바로 사라짐 → 토스트 '되돌리기' → 돌아옴
-async function deleteFlow(area, selector) {
+async function deleteFlow(area, selector, timing = false) {
   await go("control");
   if (!(await exists(selector))) return skip(`지우기·되돌리기 (화면 · ${area})`, `화면에 ${area}의 [민원 지우기] 버튼이 없음`);
   const id = await ev(`${q(selector)}.dataset.del`);            // 지울 '민원 번호' (카드 번호가 아니다)
@@ -431,11 +426,29 @@ async function deleteFlow(area, selector) {
   check(`지우기(화면·${area}): 바로 사라짐 (그 민원이 보이는 곳 ${before}곳 → 0곳)`, !!(await until(async () => (await visibleFid(id)) === 0, 2500)) && before > 0, `#${id}`);
   check(`지우기(화면·${area}): '되돌리기' 토스트`, !!(await until(() => ev(`!!document.querySelector("#toasts .toast-act")`), 3000)), await text("#toasts .toast.has-act"));
   check(`지우기(화면·${area}): 서버에서도 빠짐 (총 건수 -1)`, !!(await until(async () => (await get("/api/control")).total === total0 - 1, 4000)), `총 ${total0} → ${(await get("/api/control")).total}`);
+  if (timing) {
+    // D5-38 (WCAG 2.2.1): 되돌리기 알림은 10초 이상 보이고, 마우스를 올리면 멈춘다. 옛 5초 동안만 보였다면 여기서 실패한다.
+    const t0 = Date.now();
+    await new Promise((r) => setTimeout(r, 6500 * SLOW));
+    check("되돌리기 알림이 옛 5초를 넘겨 계속 보임 (6.5초 뒤에도)", await exists("#toasts .toast-act"));
+    const box = await ev(`(() => { const r = document.querySelector("#toasts .toast-act").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: box.x, y: box.y });            // 실제 마우스를 버튼 위로
+    const wait = Math.max(0, 11800 * SLOW - (Date.now() - t0));                                       // 원래라면 10초에 사라졌을 시각을 지나도록
+    await new Promise((r) => setTimeout(r, wait));
+    check("마우스를 올려 두면 10초가 지나도 사라지지 않음", await exists("#toasts .toast-act"), `${Math.round((Date.now() - t0) / 100) / 10}초 경과`);
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });                       // 마우스를 치우면
+    check("마우스를 치우면 곧 사라짐 (남은 시간 뒤)", !!(await until(() => ev(`!document.querySelector("#toasts .toast-act")`), 6000)));
+    // 사라진 뒤에는 되돌릴 수 없다 → 서버에서 다시 살려 이후 흐름(총 건수 등)을 원래대로 둔다
+    await rpc("restore_feedback", { p_id: Number(id) });
+    await until(async () => (await get("/api/control")).total === total0, 4000);
+    return;
+  }
   await click("#toasts .toast-act");
   check(`되돌리기(화면·${area}): 다시 보임`, !!(await until(async () => (await visibleFid(id)) > 0, 6000)), `#${id} ${await visibleFid(id)}곳`);
   check(`되돌리기(화면·${area}): 서버도 복구 (총 건수 원래대로)`, !!(await until(async () => (await get("/api/control")).total === total0, 4000)));
   await until(() => ev(`!document.querySelector("#toasts .toast-act")`), 3000);
 }
+await deleteFlow("유입", ".feed [data-del]", true);        // 알림 유지 시간·마우스 정지까지 본다
 await deleteFlow("유입", ".feed [data-del]");
 await deleteFlow("카드의 최신 민원", ".icard .ic-q [data-del]");
 

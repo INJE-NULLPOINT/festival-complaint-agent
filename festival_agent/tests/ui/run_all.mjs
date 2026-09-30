@@ -241,11 +241,11 @@ try {
   if (want("visitor")) await runScript("visitor", "방문객 접수 흐름", "report_flow.mjs", [dev], { timeoutMs: 240000 });
   if (want("admin")) await runScript("admin", "관제·조치 기능", "admin_flow.mjs", [dev], { timeoutMs: 300000 });
   // 서버 껐다 켜기: 이 스크립트가 자기 webapi·vite 를 따로 띄우고 끈다 (위의 본 서버는 그대로)
-  if (want("reconnect")) await runScript("reconnect", "연결 끊김·복구 (서버 껐다 켜기)", "reconnect_flow.mjs", [], { timeoutMs: 300000 });
+  if (want("reconnect")) await runScript("reconnect", "연결 끊김·복구 (서버 껐다 켜기)", "server_flow.mjs", ["reconnect"], { timeoutMs: 300000 });
   // 대량 데이터 속도(D5-37): 민원 1,000건·카드 30장 복사본 DB 를 자기 webapi·vite 로 띄워 잰다
-  if (want("perf")) await runScript("perf", "대량 데이터 속도 (민원 1,000건·카드 30장)", "perf_check.mjs", ["1000", "30"], { timeoutMs: 240000 });
+  if (want("perf")) await runScript("perf", "대량 데이터 속도 (민원 1,000건·카드 30장)", "server_flow.mjs", ["perf", "1000", "30"], { timeoutMs: 240000 });
   // 입력·오류·연결 점검(D5-40): 크롬 없이 HTTP 로만. 자기 webapi 를 따로 띄운다
-  if (want("security")) await runScript("security", "webapi 입력·오류·연결 제한", "security_flow.mjs", [], { timeoutMs: 180000 });
+  if (want("security")) await runScript("security", "webapi 입력·오류·연결 제한", "server_flow.mjs", ["security"], { timeoutMs: 180000 });
   if (want("mobile")) await runScript("mobile", "5폭 가로 스크롤", "mobile_check.mjs", [dev, SHOTS, "m_"], { timeoutMs: 900000 });
 
   if (want("build")) {

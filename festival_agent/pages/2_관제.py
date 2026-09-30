@@ -9,7 +9,7 @@
 import pandas as pd
 import streamlit as st
 
-from core import config, db, llm, replay, review, severity, ui
+from core import config, db, llm, replay, review, ui
 
 st.set_page_config(page_title="관제", page_icon="📊", layout="wide")
 

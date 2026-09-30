@@ -133,7 +133,7 @@ def zone_burst(window_sec: int | None = None, min_count: int | None = None, now:
     cutoff = _stamp((now or seoul_now()) - timedelta(seconds=window_sec))
     with db.connect() as conn:
         rows = conn.execute(
-            f"""SELECT z.id zone_id, z.name zone, COUNT(*) n FROM feedback_inbox i
+            """SELECT z.id zone_id, z.name zone, COUNT(*) n FROM feedback_inbox i
                 JOIN zone z ON z.id = i.zone_id WHERE i.created_at >= ? GROUP BY z.id, z.name
                 HAVING COUNT(*) >= ? ORDER BY n DESC""", (cutoff, min_count)).fetchall()
     return [{"zone_id": r["zone_id"], "zone": r["zone"], "count": r["n"], "window_sec": window_sec} for r in rows]

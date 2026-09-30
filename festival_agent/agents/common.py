@@ -11,9 +11,8 @@ from core.llm import tool
 @tool(
     name="lookup_festival_info",
     description=(
-        "한국관광공사 TourAPI에서 축제 공식 정보(기간·주소·연락처·개요)를 조회한다. "
-        "조치요청서나 브리핑에 공식 정보를 인용할 때 사용한다. "
-        "조회에 실패하면 null을 반환하므로, 그 경우 축제명만 쓰고 넘어간다."
+        "한국관광공사 TourAPI 에서 축제 공식 정보(기간·주소·연락처·개요)를 조회한다. "
+        "실패하면 null 이니 그때는 축제명만 쓴다."
     ),
     properties={
         "keyword": {"type": "string", "description": "축제명 일부 (예: 유등)"},

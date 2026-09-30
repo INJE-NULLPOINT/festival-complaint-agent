@@ -4,7 +4,7 @@
 import "./style.css";
 import "./conn.css";
 import { api, onHeaderMeta } from "./data";
-import { LABELS, esc, resetFresh, toast } from "./ui";
+import { LABELS, resetFresh, stateBox, toast } from "./ui";
 import { renderAction } from "./views/action";
 import { renderControl } from "./views/control";
 import { renderReport } from "./views/report";
@@ -43,11 +43,12 @@ async function draw(): Promise<void> {
     await views[r](app);
   } catch (e) {
     // 이미 잘 그려진 화면을 다시 그리다 실패하면(서버가 잠깐 끊김) 그 화면을 지우지 않는다 — 배너·'재연결 중'이 알려 주고, 다시 붙으면 다시 그린다 (D5-36)
-    if (!entering && shown === r && app.children.length > 0 && !app.querySelector(".err")) { drawing = false; again = false; return; }
-    app.innerHTML = `<section class="card"><p class="err">불러오지 못했습니다: ${esc(String(e))}</p></section>`;
+    if (!entering && shown === r && app.children.length > 0 && !app.querySelector(".state.error")) { drawing = false; again = false; return; }
+    console.error(e);      // 개발자용 문구는 화면에 내지 않고 콘솔에만 (esc 로 가리던 String(e) 는 더 이상 화면에 나가지 않는다)
+    app.innerHTML = `<section class="card">${stateBox({ kind: "error", icon: "alert", title: "화면을 불러오지 못했습니다", hint: "서버에 연결할 수 없거나 응답이 늦습니다. 잠시 뒤 다시 시도해 주세요. 계속되면 운영 담당자에게 알려 주세요." })}</section>`;
   }
   shown = r;
-  if (!app.querySelector(".err")) lastOk = Date.now();   // 제대로 그려졌으면 '마지막 갱신' 시각으로
+  if (!app.querySelector(".state.error")) lastOk = Date.now();   // 제대로 그려졌으면 '마지막 갱신' 시각으로
   // 그려진 뒤 잠깐 있다가 끈다 — 이후 SSE 로 다시 그릴 때는 카드가 다시 나타나지 않는다
   if (entering) enterTimer = window.setTimeout(() => app.classList.remove("enter"), 500);
   drawing = false;
@@ -67,9 +68,10 @@ live.textContent = `연결 중 · ${backendName}`; // 연결 전에도 어느 �
 
 // 헤더 배지 2개 + 합성 표시: ① 데이터(#live: 로컬 DB / Supabase) ② AI 해석 방식 ③ 합성 데이터 포함.
 // ②는 서버가 backend_llm 을 줄 때만 보인다 — 모르는 값을 짐작해서 적지 않는다.
-const AI_LABEL: Record<string, string> = { claude_code: "AI: Claude Code (개발용)", anthropic: "AI: Claude API", local: "AI: 규칙 대역" };
+const AI_LABEL: Record<string, string> = { claude_code: "AI: Claude Code (개발용)", anthropic: "AI: Claude API", local: "AI: 규칙(개발용)" };
 const chipAi = document.getElementById("chip-ai")!;
 const chipSyn = document.getElementById("chip-syn")!;
+const chipCrowd = document.getElementById("chip-crowd")!;
 function setChip(el: HTMLElement, text: string | null): void {
   el.hidden = !text;
   if (text !== null && el.textContent !== text) el.textContent = text;
@@ -78,6 +80,9 @@ if (!visitor) {
   onHeaderMeta((m) => {
     setChip(chipAi, m.backend_llm ? (AI_LABEL[m.backend_llm] ?? `AI: ${m.backend_llm}`) : null);
     setChip(chipSyn, m.synthetic?.on ? `합성 데이터 포함 · ${m.synthetic.count}건` : null);
+    // 접수 몰림(D5-33 ③): 차단이 아니라 알림. 가장 많이 몰린 구역 하나 + 나머지는 '외 N곳'
+    const c = m.crowding ?? [];
+    setChip(chipCrowd, c.length ? `접수 몰림 · ${c[0].zone} ${c[0].count}건/${Math.max(1, Math.round(c[0].window_sec / 60))}분${c.length > 1 ? ` 외 ${c.length - 1}곳` : ""}` : null);
   });
 }
 
