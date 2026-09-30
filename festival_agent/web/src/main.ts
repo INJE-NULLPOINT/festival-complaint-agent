@@ -4,7 +4,7 @@
 import "./style.css";
 import "./conn.css";
 import { api, onHeaderMeta } from "./data";
-import { LABELS, resetFresh, toast } from "./ui";
+import { LABELS, esc, resetFresh, toast } from "./ui";
 import { renderAction } from "./views/action";
 import { renderControl } from "./views/control";
 import { renderReport } from "./views/report";
@@ -44,7 +44,7 @@ async function draw(): Promise<void> {
   } catch (e) {
     // 이미 잘 그려진 화면을 다시 그리다 실패하면(서버가 잠깐 끊김) 그 화면을 지우지 않는다 — 배너·'재연결 중'이 알려 주고, 다시 붙으면 다시 그린다 (D5-36)
     if (!entering && shown === r && app.children.length > 0 && !app.querySelector(".err")) { drawing = false; again = false; return; }
-    app.innerHTML = `<section class="card"><p class="err">불러오지 못했습니다: ${String(e)}</p></section>`;
+    app.innerHTML = `<section class="card"><p class="err">불러오지 못했습니다: ${esc(String(e))}</p></section>`;
   }
   shown = r;
   if (!app.querySelector(".err")) lastOk = Date.now();   // 제대로 그려졌으면 '마지막 갱신' 시각으로

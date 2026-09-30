@@ -26,6 +26,8 @@
 """
 import argparse
 import json
+import os
+import select
 import socket
 import sys
 import threading
@@ -261,6 +263,16 @@ RPC = {
 # 관리자 동작 — 운영자 코드(X-Admin-Code 헤더 또는 p_code)가 맞을 때만 실행한다 (D5-31).
 # 방문객이 쓰는 것은 submit_feedback 하나뿐이다. schema.sql 의 같은 이름 RPC 는 p_code 인자로 같은 검사를 한다.
 MAX_BODY = 16 * 1024          # POST 본문 상한 (바이트)
+MAX_SSE = int(os.environ.get("WEBAPI_MAX_SSE") or 50)                 # 동시 실시간(SSE) 연결 상한 (D5-40 ④)
+SSE_MAX_SECONDS = int(os.environ.get("WEBAPI_SSE_MAX_SECONDS") or 1800)   # 한 연결 최대 유지 시간 — 끊으면 브라우저가 다시 붙는다
+REQUEST_TIMEOUT = float(os.environ.get("WEBAPI_REQUEST_TIMEOUT") or 30)   # 요청을 읽는 동안 이 시간 안에 안 오면 끊는다 (느린 연결로 스레드를 잡아 두는 것 방지)
+_sse_lock = threading.Lock()
+_sse_open = 0
+
+
+def _log_error(where: str, e: Exception) -> None:
+    """자세한 오류는 콘솔(로그)에만 남기고 응답에는 고정 문구만 보낸다 (경로·SQL 조각이 새지 않게, D5-40 ③)."""
+    print(f"[webapi] 오류 {where}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 ADMIN_RPC = frozenset({"request_doc", "set_action_status", "delete_feedback", "restore_feedback",
                        "resolve_review", "dismiss_review", "reopen_review", "check_admin"})
 
@@ -337,6 +349,8 @@ def max_id(table: str) -> int:
 # ── HTTP ──────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = REQUEST_TIMEOUT        # StreamRequestHandler: 연결 소켓의 읽기·쓰기 제한 시간
+
     def log_message(self, fmt, *args):  # 요청마다 찍으면 워커 로그가 묻힌다
         pass
 
@@ -361,7 +375,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self._send(200, {"backend": BACKEND, "data": fn()})
         except Exception as e:
-            self._send(500, {"error": str(e)})
+            _log_error(f"GET {path}", e)
+            self._send(500, {"error": "서버 오류"})
 
     def do_POST(self):
         path = urlparse(self.path).path
@@ -381,17 +396,26 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(n) if n else b""
         if not path.startswith("/api/rpc/") or name not in RPC:
             return self._send(404, {"error": "없는 함수"})
+        # 다른 사이트의 <form>·text/plain '단순 요청'이 접수를 실행하지 못하게 JSON 만 받는다 (브라우저는 JSON 이면 교차 출처 POST 전에 사전 확인을 해서 막힌다, D5-40 ⑥)
+        if not (self.headers.get("Content-Type") or "").lower().startswith("application/json"):
+            return self._send(415, {"error": "application/json 으로 보내 주세요"})
         try:
             args = json.loads(raw or b"{}")
+            if not isinstance(args, dict):
+                raise ApiError("요청 형식이 올바르지 않습니다")
             src = source_id.client_source(self.client_address[0], ",".join(self.headers.get_all("X-Forwarded-For") or []))   # 헤더가 여러 줄이어도 맨 오른쪽이 마지막
             data = call_rpc(name, args, self.headers.get("X-Admin-Code"), src)
             self._send(200, {"backend": BACKEND, "data": data})
         except admin.AdminError as e:                    # 401 코드 없음·틀림 · 403 코드 미설정 · 429 잠김
             self._send(e.status, {"error": str(e)})
-        except (ApiError, TypeError) as e:
+        except ApiError as e:                           # 입력 검사 문구(사용자에게 보여 줄 문장)
             self._send(400, {"error": str(e)})
+        except (TypeError, ValueError) as e:            # 모르는 인자 · 잘못된 JSON — 함수 이름·인자가 보이지 않게 고정 문구
+            _log_error(f"POST {path}", e)
+            self._send(400, {"error": "요청 형식이 올바르지 않습니다"})
         except Exception as e:
-            self._send(500, {"error": str(e)})
+            _log_error(f"POST {path}", e)
+            self._send(500, {"error": "서버 오류"})
 
     def _doc(self, name: str) -> None:
         """output/ 의 DOCX 만 내준다. 경로 탈출(../, 절대경로, 하위 폴더)은 막는다."""
@@ -409,6 +433,30 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _events(self) -> None:
+        global _sse_open
+        with _sse_lock:
+            if _sse_open >= MAX_SSE:
+                full = True
+            else:
+                _sse_open += 1
+                full = False
+        if full:                                        # 상한: 스레드·DB 조회가 접속자 수만큼 늘어나는 것을 막는다 (D5-40 ④)
+            return self._send(503, {"error": "연결이 너무 많습니다. 잠시 뒤 다시 시도해 주세요"})
+        try:
+            self._events_stream()
+        finally:
+            with _sse_lock:
+                _sse_open -= 1
+
+    def _client_gone(self) -> bool:
+        """브라우저가 연결을 닫았는지 (읽을 수 있는데 0바이트 = 상대가 끊음). 다음 전송 실패까지 기다리지 않고 자리를 바로 돌려준다."""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b""
+        except OSError:
+            return True
+
+    def _events_stream(self) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -425,9 +473,12 @@ class Handler(BaseHTTPRequestHandler):
         done_jobs = {r["id"] for r in _rows("SELECT id FROM doc_job WHERE status='done'")}
         emit("ready", {"backend": BACKEND})
         idle = 0
+        t_start = time.monotonic()
         try:
-            while True:
+            while time.monotonic() - t_start < SSE_MAX_SECONDS:     # 오래 붙은 연결은 끊는다 — 브라우저가 스스로 다시 붙는다
                 time.sleep(1)
+                if self._client_gone():
+                    break
                 fp = shared_fingerprint()
                 if fp != last_fp:
                     last_fp, idle = fp, 0
@@ -445,7 +496,7 @@ class Handler(BaseHTTPRequestHandler):
                         idle = 0
                         self.wfile.write(b": ping\n\n")
                         self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
             pass
 
 
