@@ -1,0 +1,7 @@
+/* 연결 끊김 배너 (D5-36) — 관제·조치 화면 머리 아래. 방문객 화면에는 만들어지지 않는다. */
+#conn-banner {
+  padding: 10px 16px; background: var(--text); color: var(--bg);
+  font-size: 15px; font-weight: 700; line-height: 1.5;
+}
+#conn-banner[hidden] { display: none; }
+#conn-banner span { font-weight: 400; margin-left: 6px; opacity: .85; }

@@ -2,6 +2,7 @@
 //   #control  관제 (기본)     #action  조치     #report  접수 (QR)
 //   ?v=qr     방문객용 — 상단 탭을 숨기고 접수 화면만 보인다.
 import "./style.css";
+import "./conn.css";
 import { api, onHeaderMeta } from "./data";
 import { LABELS, resetFresh, toast } from "./ui";
 import { renderAction } from "./views/action";
@@ -41,9 +42,12 @@ async function draw(): Promise<void> {
   try {
     await views[r](app);
   } catch (e) {
+    // 이미 잘 그려진 화면을 다시 그리다 실패하면(서버가 잠깐 끊김) 그 화면을 지우지 않는다 — 배너·'재연결 중'이 알려 주고, 다시 붙으면 다시 그린다 (D5-36)
+    if (!entering && shown === r && app.children.length > 0 && !app.querySelector(".err")) { drawing = false; again = false; return; }
     app.innerHTML = `<section class="card"><p class="err">불러오지 못했습니다: ${String(e)}</p></section>`;
   }
   shown = r;
+  if (!app.querySelector(".err")) lastOk = Date.now();   // 제대로 그려졌으면 '마지막 갱신' 시각으로
   // 그려진 뒤 잠깐 있다가 끈다 — 이후 SSE 로 다시 그릴 때는 카드가 다시 나타나지 않는다
   if (entering) enterTimer = window.setTimeout(() => app.classList.remove("enter"), 500);
   drawing = false;
@@ -77,6 +81,31 @@ if (!visitor) {
   });
 }
 
+// 연결 끊김 (D5-36): 끊기면 #live 가 '재연결 중'으로 바뀐다 (아래 onStatus). 8초 넘게 안 붙으면 배너로 알리고, 붙으면 사라진다.
+// 방문객 화면에는 배너를 두지 않는다 — 접수 실패는 접수 화면이 입력을 남긴 채 '다시 시도'로 알려 준다.
+const DOWN_BANNER_MS = 8000;
+let lastOk = Date.now();                      // 마지막으로 서버와 이어졌던(또는 화면을 그린) 시각
+let downTimer: number | undefined;
+const banner = document.createElement("div");
+banner.id = "conn-banner";
+banner.setAttribute("role", "status");
+banner.hidden = true;
+if (!visitor) document.querySelector("header.top")?.after(banner);
+const hhmm = (t: number) => new Date(t).toTimeString().slice(0, 5);
+function connection(ok: boolean): void {
+  if (ok) {
+    lastOk = Date.now();
+    clearTimeout(downTimer); downTimer = undefined;
+    banner.hidden = true;
+  } else if (downTimer === undefined && banner.hidden) {
+    downTimer = window.setTimeout(() => {
+      downTimer = undefined;
+      banner.innerHTML = `서버에 연결할 수 없습니다 · 마지막 갱신 ${hhmm(lastOk)} <span>자동으로 다시 연결하는 중입니다</span>`;
+      banner.hidden = false;
+    }, DOWN_BANNER_MS);
+  }
+}
+
 function subscribe(): void {
   api.subscribe({
     onChange: refresh,
@@ -88,6 +117,7 @@ function subscribe(): void {
     onStatus: (ok) => {
       live.textContent = `${ok ? "실시간" : "재연결 중"} · ${backendName}`;
       live.classList.toggle("ok", ok);
+      connection(ok);
     },
   });
 }

@@ -240,6 +240,8 @@ try {
   // ══ 점검 ═══════════════════════════════════════════════════════
   if (want("visitor")) await runScript("visitor", "방문객 접수 흐름", "report_flow.mjs", [dev], { timeoutMs: 240000 });
   if (want("admin")) await runScript("admin", "관제·조치 기능", "admin_flow.mjs", [dev], { timeoutMs: 300000 });
+  // 서버 껐다 켜기: 이 스크립트가 자기 webapi·vite 를 따로 띄우고 끈다 (위의 본 서버는 그대로)
+  if (want("reconnect")) await runScript("reconnect", "연결 끊김·복구 (서버 껐다 켜기)", "reconnect_flow.mjs", [], { timeoutMs: 300000 });
   if (want("mobile")) await runScript("mobile", "5폭 가로 스크롤", "mobile_check.mjs", [dev, SHOTS, "m_"], { timeoutMs: 900000 });
 
   if (want("build")) {

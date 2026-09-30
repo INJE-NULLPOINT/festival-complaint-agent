@@ -154,10 +154,12 @@ export async function renderReport(root: HTMLElement): Promise<void> {
     try {
       no = await api.submitFeedback(zoneId, body);
     } catch (e) {
-      err.textContent = (e as Error).message;
+      // 연결이 안 된 경우: 적은 내용·고른 구역은 그대로 두고, 같은 버튼이 '다시 시도'가 된다 (D5-36)
+      const net = isNetworkError(e);
+      err.textContent = net ? "접수하지 못했습니다. 인터넷 연결을 확인해 주세요. 적은 내용은 그대로 남아 있으니 잠시 뒤 '다시 시도'를 눌러 주세요." : (e as Error).message;
       err.hidden = false;
       btn.disabled = false;
-      btn.textContent = "접수하기";
+      btn.textContent = net ? "다시 시도" : "접수하기";
       return;
     }
     const now = new Date().toTimeString().slice(0, 5);
@@ -171,6 +173,12 @@ export async function renderReport(root: HTMLElement): Promise<void> {
       btn.textContent = "접수하기";
     });
   });
+}
+
+/** 서버에 닿지 못한 실패인지 — data-local 은 name="NetworkError", Supabase 는 fetch 실패 문구 */
+function isNetworkError(e: unknown): boolean {
+  const x = e as { name?: string; message?: string };
+  return x?.name === "NetworkError" || /failed to fetch|networkerror|load failed|network request failed/i.test(x?.message ?? "");
 }
 
 /** 접수 완료 모달. <dialog>.showModal 이 있으면 그걸 쓴다 — 뒤 화면을 막고(inert) 포커스를 안으로 옮기며 Esc 로 닫는다.

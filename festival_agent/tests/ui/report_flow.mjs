@@ -60,7 +60,8 @@ check("글자 수 표시", (await ev(`document.querySelector("#rcount").textCont
 await ev(`window.__f = window.fetch; window.fetch = () => Promise.reject(new Error("offline"))`);
 await ev(`document.querySelector("#rf button").click()`); await sleep(800);
 check("실패 → 모달 없이 폼 아래 오류", !(await dlgOpen()) && (await ev(`document.querySelector("#rerr").hidden`)) === false, await ev(`document.querySelector("#rerr").textContent`));
-check("실패 후 버튼 복구 · 입력 유지", (await ev(`document.querySelector("#rf button").textContent`)) === "접수하기" && (await ev(`document.querySelector("#rf button").disabled`)) === false
+// 연결 실패는 같은 버튼이 '다시 시도'가 된다 (D5-36). 그 밖의 실패(서버가 이유를 준 오류)는 '접수하기'.
+check("실패 후 버튼 복구 · 입력 유지", (await ev(`document.querySelector("#rf button").textContent`)) === "다시 시도" && (await ev(`document.querySelector("#rf button").disabled`)) === false
   && (await ev(`document.querySelector("textarea").value.length`)) > 0);
 await ev(`window.fetch = window.__f`);
 
