@@ -45,7 +45,8 @@ def _env_has(key: str) -> tuple[bool, str]:
     if os.getenv(key):
         return True, "환경변수 설정됨"
     envf = ROOT / ".env"
-    if envf.exists() and re.search(rf"^{key}\s*=\s*\S", envf.read_text(encoding="utf-8"), re.M):
+    # \s 는 줄바꿈까지 먹어서 빈 값 다음 줄의 주석을 값으로 오인했다 — 같은 줄의 공백만 허용
+    if envf.exists() and re.search(rf"^{key}[ \t]*=[ \t]*[^\s#]", envf.read_text(encoding="utf-8"), re.M):
         return True, ".env 에 설정됨"
     return False, "미설정"
 
