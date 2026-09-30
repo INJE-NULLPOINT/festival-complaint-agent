@@ -1623,6 +1623,7 @@ def test_운영자코드_관리자RPC는_코드가_맞아야_실행된다():
             "dismiss_review": {"p_id": ids[0]},
             "reopen_review": {"p_id": ids[0]},
             "check_admin": {},
+            "list_deleted": {},
         }
         assert set(calls) == set(webapi.ADMIN_RPC)                  # 관리자 동작이 빠짐없이 목록에 있다
         for name, args in calls.items():
@@ -1642,6 +1643,8 @@ def test_운영자코드_관리자RPC는_코드가_맞아야_실행된다():
             conn.commit()
         webapi.call_rpc("delete_feedback", calls["delete_feedback"], "tmp-operator-code")      # 헤더로 전달
         assert db.deleted_count() == 1
+        listed = webapi.call_rpc("list_deleted", {}, "tmp-operator-code")                           # 지운 민원 목록 (D5-42)
+        assert listed["ok"] is True and [x["id"] for x in listed["items"]] == [ids[0]]
         webapi.call_rpc("restore_feedback", {**calls["restore_feedback"], "p_code": "tmp-operator-code"})  # 본문 p_code
         assert db.deleted_count() == 0
         webapi.call_rpc("set_action_status", calls["set_action_status"], "tmp-operator-code")
