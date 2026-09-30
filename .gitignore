@@ -6,3 +6,6 @@ festival_agent/backup/
 *.db-wal
 *.db-shm
 .env
+
+# 웹 개발 서버 캐시
+festival_agent/web/.vite/
