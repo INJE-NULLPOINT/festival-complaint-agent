@@ -11,7 +11,7 @@
 //   · 최근 10분에 **같은 출처에서** 5번 틀리면 그 출처는 10분 안에는 맞는 코드도 거부한다 (무차별 대입 방지).
 //     맞는 코드를 넣으면 **그 출처의** 기록만 비운다. 출처는 접속 주소의 하루짜리 해시(core/source_id.ts)라서,
 //     방문객이 틀린 코드를 몇 번 보내도 다른 출처의 운영자는 잠기지 않는다 (D5-40).
-//     접속 주소를 알 수 없으면(source 없음) 예전처럼 전체가 한 출처로 묶인다.
+//     접속 주소를 알 수 없으면(source 없음) 전체가 한 출처로 묶인다.
 //   · 비교는 timingSafeEqual 로 한다 (시간차 공격 방지).
 //
 // 한계: 공유 코드라 누가 했는지는 구분하지 못한다. 코드가 새면 바꿔야 한다.
@@ -49,7 +49,6 @@ export async function _purge_old(): Promise<void> {
   const cutoff = kst_stamp(plus(new Date(), -hours(KEEP_HOURS)));
   const conn = await db.connect();
   await conn.execute("DELETE FROM admin_attempt WHERE at < ?", [cutoff]);
-  await conn.commit();
 }
 
 function same(a: string, b: string): boolean {
@@ -68,12 +67,10 @@ export async function verify(code: unknown, source: string | null = null): Promi
   const conn = await db.connect();
   if (same(code, expected)) {
     await conn.execute("DELETE FROM admin_attempt WHERE COALESCE(src, '') = ?", [src]);   // 이 출처의 기록만
-    await conn.commit();
     await _purge_old();
     return;
   }
   await conn.execute("INSERT INTO admin_attempt (at, src) VALUES (?, ?)", [kst_stamp(new Date()), src]);
-  await conn.commit();
   await _purge_old();
   throw new AdminError(MSG_NEED, 401);
 }

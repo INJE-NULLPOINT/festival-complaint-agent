@@ -20,6 +20,7 @@ await sleep(300);
 check("?zone=유등터널 미리 선택", (await ev(`document.querySelector("select").selectedOptions[0].textContent`)) === "유등터널");
 check("머리글 = 축제 이름", (await ev(`document.querySelector(".brand strong").textContent`)) !== "축제 민원 관제",
   await ev(`document.querySelector(".brand strong").textContent`));
+check("위급 안내 한 줄 — 119·112 에 먼저 연락 (글만, 전화 링크 없음)", /119·112/.test(await ev(`[...document.querySelectorAll(".rp > .rp-lead")].map((e) => e.textContent).join(" ")`)));
 check("응급 박스 없음 (제출 전 화면에 119/112 박스·전화 링크 없음)", (await ev(`document.querySelectorAll(".rp-sos, a[href^='tel:']").length`)) === 0);
 check("FAQ 5문항 (접속 기록 문항 포함, 사진 문항 없음)", (await ev(`document.querySelectorAll(".rp-faq details").length`)) === 5 &&
   !(await ev(`document.querySelector(".rp-faq").textContent.includes("사진")`)));

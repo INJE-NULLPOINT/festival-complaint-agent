@@ -7,8 +7,8 @@ import { config } from "../core/config.ts";
 import { minutes, isoformat, plus } from "../core/datetime.ts";
 import * as db from "../core/db.ts";
 import * as issues from "../core/issues.ts";
+import * as llm from "../core/llm.ts";
 import { Agent, tool } from "../core/llm.ts";
-import { floatstr } from "../core/pyfmt.ts";
 import * as review from "../core/review.ts";
 
 export type Row = Record<string, any>;
@@ -19,8 +19,8 @@ export const SYSTEM = `너는 지역 축제 운영 관제 시스템의 '심각�
 
 절차
 1. get_window_stats 로 최근 상황을 파악한다 (기본 윈도우 60분). 급증이 의심되면 더 짧은 윈도우(15~30분)로 한 번 더 확인해도 된다.
-2. 유형마다 score_label 을 호출해 점수와 등급을 받는다.
-3. save_snapshot 으로 이번 판정을 기록한다.
+2. 유형마다 score_label 을 호출해 점수와 등급을 받는다. 서로 결과가 필요 없으므로 **한 응답에서 유형별로 동시에** 부른다.
+3. save_snapshot 으로 이번 판정을 기록한다 (같은 응답에서 score_label 들과 함께 불러도 된다).
 4. 아래에 해당하는 유형만 raise_alert 로 알린다: 등급이 immediate / 급증(spiked) 감지 / 직전 판정보다 등급 상승.
 5. 마지막에 가장 심각한 유형 1개와 그 이유를 두 문장 이내로 보고한다.
 
@@ -29,6 +29,7 @@ export const SYSTEM = `너는 지역 축제 운영 관제 시스템의 '심각�
   한글 등급(즉시·높음·보통·낮음)과 건수·이유(안전 관련·급증)만 쓴다. 영어 등급(immediate·high)도 쓰지 마라.
 - 건수가 많다고 심각한 것이 아니다. 안전 관련은 건수가 적어도 위로 올라간다. 이 역전이 보이면 알림 문구에 이유를 명시하라.
 - 알림을 남발하지 마라. 조건에 맞는 것만 올린다.
+- 이미 받은 결과(같은 도구·같은 인자)를 다시 묻지 마라. 결과가 서로 필요 없는 호출은 한 응답에서 동시에 부른다.
 `;
 
 export const get_window_stats = tool({
@@ -36,6 +37,7 @@ export const get_window_stats = tool({
   description: "지정 시간 구간의 유형별 민원 통계를 조회한다.",
   properties: { window_min: { type: "integer", description: "구간(분). 기본 60" } },
   params: ["window_min"],
+  cacheable: true,
 }, async (window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Row> => {
   const rows = await db.window_rows(window_min);
   const counts = new Map<string, number>();
@@ -63,13 +65,14 @@ export const score_label = tool({
   },
   required: ["label"],
   params: ["label", "window_min"],
+  cacheable: true,
 }, async (label: string, window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Row> => {
   const ranked = await db.ranked(window_min);
   for (const r of ranked) {
     if (r.label === label) {
       return {
         label, korean: config.LABELS[label] ?? label,
-        freq: r.freq, score: r.score, grade: r.grade,
+        freq: r.freq, safety_freq: r.safety_freq, score: r.score, grade: r.grade,
         formula: r.formula, spiked: r.spike.spiked,
         spike_multiplier: r.spike.multiplier,
       };
@@ -78,12 +81,16 @@ export const score_label = tool({
   return { label, freq: 0, score: 0.0, grade: "low", formula: "해당 구간에 데이터 없음", spiked: false };
 });
 
+// 짧은 창 재확인(계획, D5-65)은 기록(스냅샷)을 남기지 않는다 — 60분 창 기록의 '가장 최근 판정'이 15분 창으로 바뀌면 화면이 흔들린다.
+export const _RUN = { snapshot: true };
+
 export const save_snapshot = tool({
   name: "save_snapshot",
   description: "현재 구간의 전체 심각도 판정을 기록한다 (추이의 원천). 같은 판정이 이미 있으면 다시 쓰지 않는다.",
   properties: { window_min: { type: "integer" } },
   params: ["window_min"],
 }, async (window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Row> => {
+  if (!_RUN.snapshot) return { saved: 0, already_recorded: false, skipped: true, note: "이번 실행은 재확인이라 기록하지 않는다" };
   const ranked = await db.ranked(window_min);
   const window = `${window_min}min`;
   const already = ranked.length > 0 && (await db.severity_recorded(ranked, window));
@@ -119,9 +126,10 @@ export const raise_alert = tool({
   return { alert_id: await db.raise_alert(label, kind, detail) };
 });
 
-/** 알림 문구의 이유 — 계산식 대신 말로 (안전 관련 가중·급증). */
+/** 알림 문구의 이유 — 계산식 대신 말로 (안전 관련 가중·급증). 안전 민원이 일부일 때는 그 건수를 밝힌다 (유형 등급 ≠ 구역 카드 등급, D5-59). */
 function _why(s: Row): string {
   const bits: string[] = [];
+  if (s.safety_freq > 0 && s.safety_freq < s.freq) bits.push(`그중 안전 의심 ${s.safety_freq}건이며 구역별 카드 등급은 다를 수 있습니다`);
   if ((s.formula || "").includes("안전2.0")) bits.push("안전 관련이라 가중치가 적용됐습니다");
   if (s.spiked && s.grade === "immediate") bits.push("최근 유입이 급증했습니다");
   return bits.length ? " " + bits.join(", ") + "." : "";
@@ -147,7 +155,7 @@ async function local_run(agent: Agent, _user_input: string, ctx: Row): Promise<s
     } else if (s.spiked) {
       await agent.call("raise_alert", {
         label: s.label, kind: "spike",
-        detail: `${korean} ${s.freq}건 — 최근 유입이 급증했습니다 (${floatstr(s.spike_multiplier)}배).` + _why(s),
+        detail: `${korean} ${s.freq}건 — 최근 유입이 급증했습니다.` + _why(s),
       });
       raised += 1;
     }
@@ -166,11 +174,18 @@ export const monitor = new Agent({
   local: local_run,
 });
 
-export async function run_once(window_min: number = config.DEFAULT_WINDOW_MIN): Promise<string> {
+/** opts.snapshot=false: 재확인 실행 — 판정·알림은 그대로 하되 severity 기록은 남기지 않는다 (계획이 짧은 창을 고른 주기, D5-65). */
+export async function run_once(window_min: number = config.DEFAULT_WINDOW_MIN, opts: { snapshot?: boolean } = {}): Promise<string> {
   await review.raise_stale_alerts();            // 방치된 안전 의심 '확인 필요' 알림 (같은 민원은 한 번만)
   if (!Object.keys(await db.label_counts()).length) return "";
-  return monitor.run(
-    `최근 ${window_min}분 구간의 민원 상황을 판정하고, 즉시 대응이 필요한 유형이 있으면 알림을 올려줘.`,
-    { window_min },
-  );
+  _RUN.snapshot = opts.snapshot !== false;
+  try {
+    return await monitor.run(
+      `최근 ${window_min}분 구간의 민원 상황을 판정하고, 즉시 대응이 필요한 유형이 있으면 알림을 올려줘.` +
+      (_RUN.snapshot ? "" : " 이번은 재확인이라 save_snapshot 은 부르지 마라."),
+      { window_min },
+    );
+  } finally {
+    _RUN.snapshot = true;
+  }
 }

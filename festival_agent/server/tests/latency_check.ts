@@ -20,7 +20,7 @@
 //     node server/tests/latency_check.ts --n 50 --seconds 5
 //     node server/tests/latency_check.ts --backend claude_code   (옵션 · 비용 발생 · 오래 걸림)
 // 결과: server/tests/latency_report.md · 종료 코드 0 통과 / 1 실패(유실·중복·시간 초과)
-//   (Python 의 tests/latency_report.md 는 전환 전까지 그대로 둔다)
+//   
 import "../scripts/_safe_env.ts";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";

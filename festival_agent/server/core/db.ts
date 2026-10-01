@@ -7,7 +7,7 @@
 //
 // Python 과 다른 점(동작은 같다): 모든 DB 함수가 async 이다 (pg 가 비동기라서).
 //   Python `with connect() as conn:` → `const conn = await connect()`. 연결은 닫지 않는다(경로별로 재사용, 풀).
-//   커밋은 문장마다 즉시 된다(autocommit) — commit() 은 호환용 빈 함수다.
+//   커밋은 문장마다 즉시 된다(autocommit).
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import pg from "pg";
@@ -30,8 +30,6 @@ export interface Cursor {
 export interface Conn {
   execute(sql: string, params?: Params): Promise<Cursor>;
   executescript(script: string): Promise<void>;
-  commit(): Promise<void>;
-  rollback(): Promise<void>;
 }
 
 export const SCHEMA = `
@@ -43,7 +41,8 @@ CREATE TABLE IF NOT EXISTS festival (
 );
 
 CREATE TABLE IF NOT EXISTS zone (
-  id INTEGER PRIMARY KEY, festival_id INTEGER, name TEXT UNIQUE
+  id INTEGER PRIMARY KEY, festival_id INTEGER, name TEXT UNIQUE,
+  hidden INTEGER DEFAULT 0       -- 1 = 방문객 구역 선택에서 숨김 (민원이 달려 있어 지우지 않는다, D5-90)
 );
 
 CREATE TABLE IF NOT EXISTS feedback (
@@ -79,7 +78,8 @@ CREATE TABLE IF NOT EXISTS severity (
   label TEXT, "window" TEXT, as_of TEXT,
   freq INTEGER, avg_sentiment REAL,
   base_score REAL, safety_w REAL, spike_w REAL, pending_w REAL,
-  score REAL, grade TEXT, formula TEXT
+  score REAL, grade TEXT, formula TEXT,
+  spike_mult REAL, safety_freq INTEGER      -- 개발자 보기용 내부값 (급증 배수 · 안전(is_safety) 민원 수, D5-62)
 );
 
 CREATE TABLE IF NOT EXISTS alert (
@@ -171,6 +171,11 @@ CREATE TABLE IF NOT EXISTS classify_cache (
   hash TEXT PRIMARY KEY, result TEXT
 );
 
+-- 워커 상태 (개발자 보기, D5-62): 루프마다 한 줄. name = ingest|classify|doc_jobs|agents|issues, '_backend' 는 LLM 백엔드(note).
+CREATE TABLE IF NOT EXISTS worker_status (
+  name TEXT PRIMARY KEY, last_at TEXT, took_ms INTEGER, ok INTEGER DEFAULT 1, note TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_cls_status ON classification(status);
 CREATE INDEX IF NOT EXISTS idx_fb_ingested ON feedback(ingested_at);
 `;
@@ -191,7 +196,7 @@ export function is_pg(): boolean {
 const _ID_TABLES = new Set(["festival", "zone", "feedback", "severity", "alert", "action_request",
   "agent_task", "agent_log", "briefing", "feedback_inbox", "doc_job", "replay_state", "issue", "admin_attempt"]);
 // INSERT OR REPLACE 의 충돌 기준 컬럼
-const _UPSERT_KEY: Record<string, string> = { department_map: "label", classify_cache: "hash", festival_info: "content_id" };
+const _UPSERT_KEY: Record<string, string> = { department_map: "label", classify_cache: "hash", festival_info: "content_id", worker_status: "name" };
 const _INSERT_RE = /^\s*INSERT\s+(OR\s+(IGNORE|REPLACE)\s+)?INTO\s+(\w+)\s*\(([^)]*)\)/is;
 
 /** SQLite 문법 → Postgres. [변환된 SQL, RETURNING id 를 붙였는지] */
@@ -266,8 +271,6 @@ class SqliteConn implements Conn {
     this.db.exec(script);
   }
 
-  async commit(): Promise<void> {}
-  async rollback(): Promise<void> {}
 }
 
 // ── Postgres ──
@@ -300,8 +303,6 @@ class PgConn implements Conn {
   }
 
   async executescript(_script: string): Promise<void> {}     // Postgres 스키마는 supabase/schema.sql 로 관리한다
-  async commit(): Promise<void> {}
-  async rollback(): Promise<void> {}
 }
 
 const _pgConn = new PgConn();
@@ -374,6 +375,11 @@ async function _migrate_sqlite(conn: Conn): Promise<void> {
   for (const col of ["top_issue_key", "issue_sig"]) {
     if (!have.has(col)) await conn.execute(`ALTER TABLE briefing ADD COLUMN ${col} TEXT`);
   }
+  have = await cols("zone");
+  if (have.size && !have.has("hidden")) await conn.execute("ALTER TABLE zone ADD COLUMN hidden INTEGER DEFAULT 0");
+  have = await cols("severity");
+  if (!have.has("spike_mult")) await conn.execute("ALTER TABLE severity ADD COLUMN spike_mult REAL");
+  if (!have.has("safety_freq")) await conn.execute("ALTER TABLE severity ADD COLUMN safety_freq INTEGER");
   have = await cols("agent_log");
   for (const col of ["input_tokens", "output_tokens", "cache_read_tokens"]) {
     if (!have.has(col)) await conn.execute(`ALTER TABLE agent_log ADD COLUMN ${col} INTEGER DEFAULT 0`);
@@ -385,6 +391,8 @@ export const INDEX_SQL = [
   "CREATE INDEX IF NOT EXISTS idx_fb_posted ON feedback(posted_at)",
   "CREATE INDEX IF NOT EXISTS idx_fb_src_posted ON feedback(source, posted_at)",
   "CREATE INDEX IF NOT EXISTS idx_fb_deleted ON feedback(deleted_at)",
+  // 접수함 수거 쿼리(워커가 1초마다)가 비어 있을 때 거의 공짜가 되게: 아직 안 옮긴 접수만 색인한다 (D5-71)
+  "CREATE INDEX IF NOT EXISTS idx_inbox_pending ON feedback_inbox(id) WHERE feedback_id IS NULL",
 ];
 
 /** 스키마 생성 + 시드 투입. 몇 번 실행해도 안전하다. */
@@ -405,13 +413,13 @@ export async function init_db(): Promise<void> {
   } else {
     fid = row.id;
   }
-  for (const z of config.ZONES) {
-    await conn.execute("INSERT OR IGNORE INTO zone (festival_id, name) VALUES (?,?)", [fid, z]);
+  // 구역·부서는 **비어 있을 때만** 기본값을 넣는다 — 운영자가 바꾼 이름·부서·연락처를 다음 시작에 되돌리지 않게 (D5-90). config 는 DB 가 빈 곳의 기본값.
+  if ((await conn.execute("SELECT COUNT(*) c FROM zone")).fetchone()!.c === 0) {
+    for (const z of config.ZONES) await conn.execute("INSERT OR IGNORE INTO zone (festival_id, name) VALUES (?,?)", [fid, z]);
   }
   for (const [label, [dept, contact]] of Object.entries(config.DEPARTMENT_MAP)) {
-    await conn.execute("INSERT OR REPLACE INTO department_map (label, department, contact) VALUES (?,?,?)", [label, dept, contact]);
+    await conn.execute("INSERT OR IGNORE INTO department_map (label, department, contact) VALUES (?,?,?)", [label, dept, contact]);
   }
-  await conn.commit();
 }
 
 export async function festival_id(): Promise<number> {
@@ -431,7 +439,6 @@ export async function set_feedback_deleted(feedback_id: number, deleted: boolean
     throw new KeyError(`없는 민원입니다: ${feedback_id}`);
   }
   await conn.execute("UPDATE feedback SET deleted_at=? WHERE id=?", [deleted ? (ts ?? now()) : null, feedback_id]);
-  await conn.commit();
 }
 
 export { KeyError };      // Python KeyError 대응 (core/errors.ts)
@@ -484,7 +491,6 @@ export async function insert_feedback(zone_id: number | null, raw_text: string, 
   }
   const fid = cur.lastrowid as number;
   await conn.execute("INSERT INTO classification (feedback_id, status) VALUES (?, 'pending')", [fid]);
-  await conn.commit();
   return fid;
 }
 
@@ -499,7 +505,6 @@ export async function log_agent(agent: string, action: string, input_summary = "
     [agent, action, input_summary.slice(0, 200), output_summary.slice(0, 200), reasoning.slice(0, 300), Math.trunc(latency_ms), now(),
       input_tokens, output_tokens, cache_read_tokens],
   );
-  await conn.commit();
 }
 
 export async function raise_alert(label: string, kind: string, detail: string): Promise<number> {
@@ -508,24 +513,32 @@ export async function raise_alert(label: string, kind: string, detail: string): 
     "INSERT INTO alert (festival_id, label, kind, detail, created_at) VALUES (?,?,?,?,?)",
     [await festival_id(), label, kind, detail, now()],
   );
-  await conn.commit();
   return cur.lastrowid as number;
 }
 
 export async function save_severity(rows: Row[], window: string): Promise<void> {
   const ts = now();
   const conn = await connect();
+  const fid = await festival_id();
   for (const r of rows) {
     await conn.execute(
       `INSERT INTO severity
        (festival_id, label, "window", as_of, freq, avg_sentiment,
-        base_score, safety_w, spike_w, pending_w, score, grade, formula)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [await festival_id(), r.label, window, ts, r.freq, r.avg_sentiment,
-        r.base_score, r.safety_w, r.spike_w, r.pending_w, r.score, r.grade, r.formula],
-    );
+        base_score, safety_w, spike_w, pending_w, score, grade, formula, spike_mult, safety_freq)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [fid, r.label, window, ts, r.freq, r.avg_sentiment, r.base_score, r.safety_w, r.spike_w, r.pending_w, r.score, r.grade, r.formula,
+        r.spike?.multiplier ?? null, r.safety_freq ?? null]);
   }
-  await conn.commit();
+}
+
+/** 워커 루프 상태 한 줄 (개발자 보기). 실패해도 워커는 계속 돈다. */
+export async function set_worker_status(name: string, took_ms: number, ok = true, note = ""): Promise<void> {
+  try {
+    const conn = await connect();
+    await conn.execute(
+      "INSERT OR REPLACE INTO worker_status (name, last_at, took_ms, ok, note) VALUES (?,?,?,?,?)",
+      [name, now(), Math.round(took_ms), ok ? 1 : 0, note.slice(0, 200)]);
+  } catch { /* 상태 기록 실패는 무시 */ }
 }
 
 /** 이 창의 가장 최근 스냅샷이 rows 와 같은 판정이면 true. (같은 주기에 둘이 같은 초에 저장해 행이 2개씩 생기던 문제) */
@@ -716,7 +729,6 @@ export async function cache_get(digest: string): Promise<Row | null> {
 export async function cache_put(digest: string, result: Row): Promise<void> {
   const conn = await connect();
   await conn.execute("INSERT OR REPLACE INTO classify_cache (hash, result) VALUES (?,?)", [digest, JSON.stringify(result)]);
-  await conn.commit();
 }
 
 // ── 웹 연동 ──
@@ -735,7 +747,6 @@ export async function pull_inbox(limit = 50): Promise<number> {
     if (fid !== null && r.dup_count) {                     // 옮기기 전에 합쳐진 횟수를 이어 준다
       await conn.execute("UPDATE feedback SET dup_count=? WHERE id=?", [r.dup_count, fid]);
     }
-    await conn.commit();
     if (fid !== null) moved += 1;
   }
   return moved;
@@ -748,7 +759,6 @@ export async function request_doc_job(label: string): Promise<number> {
     "SELECT id FROM doc_job WHERE label=? AND status IN ('queued','running') LIMIT 1", [label])).fetchone();
   if (busy) return busy.id;
   const cur = await conn.execute("INSERT INTO doc_job (label, created_at) VALUES (?,?)", [label, now()]);
-  await conn.commit();
   return cur.lastrowid as number;
 }
 
@@ -766,7 +776,6 @@ export async function claim_doc_jobs(limit = 2): Promise<Row[]> {
   const conn = await connect();
   const rows = (await conn.execute("SELECT id, label FROM doc_job WHERE status='queued' ORDER BY id LIMIT ?", [limit])).fetchall();
   for (const r of rows) await conn.execute("UPDATE doc_job SET status='running' WHERE id=?", [r.id]);
-  await conn.commit();
   return rows.map((r) => ({ ...r }));
 }
 
@@ -776,5 +785,4 @@ export async function finish_doc_job(job_id: number, action_id: number | null, e
     "UPDATE doc_job SET status=?, action_request_id=?, error=?, finished_at=? WHERE id=?",
     [error ? "failed" : "done", action_id, error.slice(0, 300) || null, now(), job_id],
   );
-  await conn.commit();
 }

@@ -62,7 +62,6 @@ async function pick(keyword: string): Promise<void> {
                WHERE id=(SELECT id FROM festival LIMIT 1)`,
     [info.title, info.addr || config.FESTIVAL.region, _fmt(info.start_date), _fmt(info.end_date)],
   );
-  await conn.commit();
 
   console.log(`대상 축제를 설정했습니다: ${info.title}`);
   console.log(`  기간 ${_fmt(info.start_date)} ~ ${_fmt(info.end_date)}`);

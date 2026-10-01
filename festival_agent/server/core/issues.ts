@@ -24,7 +24,9 @@ import { config } from "./config.ts";
 import * as db from "./db.ts";
 import { fromisoformat } from "./datetime.ts";
 import * as privacy from "./privacy.ts";
+import * as settings from "./settings.ts";
 import { fixed, round } from "./pyfmt.ts";
+import { compute_severity } from "./severity.ts";
 
 export type Row = Record<string, any>;
 
@@ -87,6 +89,8 @@ export async function build_cards(window_min: number | null = null): Promise<Row
   const ref = await db.data_now();
   const zone_names = new Map<number, string>((await db.zones()).map((z) => [z.id as number, z.name as string]));
   const actions = await db.latest_actions();
+  const dept_map = await settings.department_map();         // 담당 부서·연락처는 DB(운영자 설정) 기준 (D5-90)
+  const win_total = ranked.reduce((s, r) => s + (r.freq as number), 0);       // 유형별 건수의 합 = 심각도 계산의 창 전체 건수
 
   const groups = new Map<string, { label: string; zone_id: number | null; items: Row[] }>();
   for (const r of rows) {
@@ -101,7 +105,10 @@ export async function build_cards(window_min: number | null = null): Promise<Row
     const label = sev.label as string;
     if (sev.grade === "low" && !(sev.safety_w > 1)) continue;     // 노출 조건: mid 이상 또는 안전
     for (const g of groups.values()) {
-      if (g.label === label) cards.push(_card(sev, g.zone_id, g.items, win, ref, zone_names, actions[label] ?? null));
+      if (g.label !== label) continue;
+      const card = _card(sev, g.zone_id, g.items, win, ref, zone_names, actions[label] ?? null, win_total, dept_map);
+      if (card.grade === "low" && !card.is_safety) continue;      // 비안전으로 다시 매긴 카드도 같은 노출 조건
+      cards.push(card);
     }
   }
 
@@ -132,11 +139,25 @@ export async function build_cards(window_min: number | null = null): Promise<Row
 }
 
 function _card(sev: Row, zone_id: number | null, items: Row[], win: number, ref: Date,
-               zone_names: Map<number, string>, act: Row | null): Row {
+               zone_names: Map<number, string>, act: Row | null, win_total: number, dept_map: Record<string, [string, string]>): Row {
   const label = sev.label as string;
   const fz = items.length;
   const fl = sev.freq as number;
-  const S = sev.score as number;
+  // 안전 가중은 안전 민원(is_safety=true 또는 라벨 safety)이 이 카드에 있을 때만 (D5-59). 혼잡 유형에 안전 민원이 다른 구역에만 있으면
+  // 이 카드는 비안전으로 다시 매긴다: 이 카드에 속한 민원(건수·감정)으로 비안전 규칙(B-03 상한 포함)을 적용해 점수와 등급을 새로 구한다.
+  // 유형 등급은 S-04 가 다른 구역의 안전 민원 때문에 걸린 것일 수 있어 물려받지 않는다 (급증·미조치 가중은 유형 그대로).
+  const type_safe = (sev.safety_w as number) > 1;
+  const card_safe = type_safe && items.some((i) => Boolean(i.is_safety) || config.SAFETY_LABELS.has(i.label));
+  let S = sev.score as number;
+  let grade = sev.grade as string;
+  if (type_safe && !card_safe) {
+    const avg = items.reduce((s, i) => s + (Number(i.sentiment) || 0), 0) / Math.max(items.length, 1);
+    const own = compute_severity(fz, avg, win_total, {
+      is_safety: false, spiked: (sev.spike_w as number) > 1, unhandled: (sev.pending_w as number) > 1,
+    });
+    S = own.score as number;
+    grade = own.grade as string;
+  }
   const C = zone_id === null ? 0.5 : 0.5 + 0.5 * (fl ? fz / fl : 0.0);
   const ordered = [...items].sort((a, b) => {
     const pa = a.posted_at || "";
@@ -176,7 +197,7 @@ function _card(sev: Row, zone_id: number | null, items: Row[], win: number, ref:
     raw_group = recurred ? "main" : "done";
   }
 
-  const [dept, contact] = config.DEPARTMENT_MAP[label] ?? ["미지정", "-"];
+  const [dept, contact] = dept_map[label] ?? ["미지정", "-"];
   // 지시문 형태 민원("AI 에게: … 조치에 넣어라")은 근거 후보에서 빼고 맨 뒤로 보낸다. 근거로 인정하면 공격 원문에 적힌
   // 시설명·조치가 그대로 통과하기 때문이다. 원문 복사 검사에는 계속 쓰인다 (injection=true).
   const bad = ordered.filter((i) => privacy.looks_like_injection(i.raw_text || ""));
@@ -188,13 +209,13 @@ function _card(sev: Row, zone_id: number | null, items: Row[], win: number, ref:
   const shown = (clean.length ? clean : cands.slice(0, LATEST_SHOWN)).map((c) => ({ id: c.id, text: c.text, posted_at: c.posted_at }));
   return {
     key: issue_key(label, zone_id), label, zone_id, zone_name,
-    grade: sev.grade, is_safety: Number(sev.safety_w > 1), type_score: S,
+    grade, is_safety: Number(card_safe), type_score: S,
     conc: round(C, 2), rec: round(R, 2), card_score: P, formula,
     freq: fz, type_freq: fl, last_at, same_zone_others: 0,
     recurred: Number(recurred), new_since_request: Number(new_since), raw_group,
     action_status: status || "none", action_request_id: act ? act.id : null,
     department: dept, contact,
-    signature: `${label}|${_zone_key(zone_id)}|${sev.grade}|${raw_group}`,
+    signature: `${label}|${_zone_key(zone_id)}|${grade}|${raw_group}`,
     member_ids: items.map((i) => i.feedback_id),
     candidates: cands, latest_quotes: _dumps(shown),
     rank_no: 0, grp: raw_group,
@@ -278,7 +299,7 @@ const py_repr = (v: unknown): string => (typeof v === "string" ? `'${v}'` : v ==
  * ⑤ 조치가 근거 민원 원문과 연속 12자 이상 같으면 거부
  * ⑥ 고위험 표현: 안전 유형 + 즉시 등급 카드에서만 허용하고 needs_judgment=1. 그 밖의 카드에서는 그 조치만 뺀다
  */
-export function check_entry(card: Row, entry: unknown): [string[], Row] {
+export function check_entry(card: Row, entry: unknown, zones: readonly string[] = config.ZONES): [string[], Row] {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return [["문장을 주지 않음"], {}];
   const e = entry as Row;
   const errs: string[] = [];
@@ -295,7 +316,7 @@ export function check_entry(card: Row, entry: unknown): [string[], Row] {
   if (!(title.length >= 2 && title.length <= TITLE_MAX)) errs.push(`title 은 2~${TITLE_MAX}자여야 함 (지금 ${title.length}자)`);
   if (/\d/.test(title) || NUMBER_WORDS.search(title)) errs.push("title 에 숫자(한글 수사 포함)가 있음");
   if (score_leak(title)) errs.push(`title 에 점수·영어 등급 표현 '${score_leak(title)}' 이 있음 (점수는 사람에게 보이지 않는다)`);
-  for (const z of config.ZONES) {                      // 다른 구역 이름 금지
+  for (const z of zones) {                             // 다른 구역 이름 금지 (호출하는 쪽이 운영자 설정의 모든 구역 이름을 넘긴다)
     if (z !== zone && title.includes(z)) errs.push(`title 에 다른 구역 이름 '${z}' 이 있음`);
   }
   for (const w of config.PLACE_WORDS) {
@@ -477,7 +498,6 @@ export async function refresh(window_min: number | null = null): Promise<[number
       changed += 1;
     }
   }
-  await conn.commit();
   return [changed, cards];
 }
 
@@ -554,7 +574,7 @@ export async function apply_entries(entries: unknown, source = "llm", window_min
       src = "local";
       cleaned.needs_judgment = Number(cleaned.actions.some((a: Row) => escalation_hits(a.text).length));
     } else {
-      [errs, cleaned] = check_entry(c, by_key.get(c.key));
+      [errs, cleaned] = check_entry(c, by_key.get(c.key), await settings.all_zone_names());
       src = "llm";
     }
     let fails = 0;
@@ -578,7 +598,6 @@ export async function apply_entries(entries: unknown, source = "llm", window_min
     }
     await conn.execute(`UPDATE issue SET ${sets.join(", ")} WHERE issue_key=?`, [...vals, c.key]);
   }
-  await conn.commit();
   for (const [key, errs] of Object.entries(out.errors as Record<string, string[]>)) {
     await db.log_agent("supervisor", "issue_check_failed", key, errs.join("; ").slice(0, 200),
       "결정적 검사 실패 — 템플릿으로 저장, 다음 주기에 다시 시도");

@@ -9,7 +9,7 @@
 //               (중복은 캐시로 처리돼 정확도를 부풀리기 때문이다). 합성 시드라 **참고값**이다.
 //   평가셋 모드 --labels <csv>. 사람이 직접 모은 실제 리뷰 + 2인 독립 라벨.
 //               열: text · label_a · label_b · label_final (+ zone · posted_at · source_url · …)
-//               scripts/templates/eval_labels_template.csv, 라벨 방법은 제출_준비/라벨링_가이드.md.
+//               라벨 CSV(text,label_a,label_b,label_final)
 //               라벨은 사람이 붙인다. 합성·생성 문장으로 채우면 안 된다 (source_url 이 없는 행은 제외하고,
 //               dev_sample.csv 는 거부한다).
 //
@@ -377,7 +377,7 @@ async function main(): Promise<number> {
       console.log(`라벨러 간 일치 ${pct(agree!)} (${lab.a.length}행 중 불일치 ${lab.disagree}건) · ` +
         `Cohen's κ = ${kap} (${kappa_word(kappa)})`);
       if (kappa !== null && kappa < 0.6) {
-        console.log("  ※ κ 가 0.6 미만이면 유형 정의부터 다시 맞춘 뒤 라벨링해야 합니다 (제출_준비/라벨링_가이드.md)");
+        console.log("  ※ κ 가 0.6 미만이면 유형 정의부터 다시 맞춘 뒤 라벨링해야 합니다");
       }
     }
   }

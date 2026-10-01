@@ -495,7 +495,6 @@ async function cmd_reset(args: Args): Promise<void> {
     await conn.execute("UPDATE classification SET status='pending', label=NULL, sentiment=NULL, is_safety=NULL, confidence=NULL");
     print(`판정 초기화 완료 · 대기열 ${await db.pending_count()}건`);
   }
-  await conn.commit();
 }
 
 // ── demo ──────────────────────────────────────────────────────────

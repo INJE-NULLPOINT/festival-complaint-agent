@@ -8,6 +8,7 @@
 //   파일        GET  /api/docs/<파일명>  — DOCS_DIR(기본 output/)의 조치요청서 DOCX (Storage 대역)
 //   쓰기(RPC)   POST /api/rpc/<이름> — supabase/schema.sql 의 같은 이름 함수와 검증 규칙이 같다
 //   관리자 읽기 GET  /api/deleted (X-Admin-Code) — 최근 지운 민원
+//               GET  /api/dev?since_log=&since_cls= — 개발자 보기(내부 AI 동작·점수·계산식, D5-62). **운영자 코드 없이 공개 읽기** (응답은 가려서, 출처별 1분 60번 → 429)
 //   실시간      GET  /api/events  (SSE) — 1초마다 테이블 지문을 비교해 알린다
 //
 // 지키는 규칙 (Supabase 와 동일)
@@ -27,18 +28,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import * as admin from "./core/admin.ts";
-import { BASE_DIR, config } from "./core/config.ts";
+import { config, docs_dir } from "./core/config.ts";
 import * as db from "./core/db.ts";
+import * as devfeed from "./core/devfeed.ts";
 import * as intake from "./core/intake.ts";
 import * as issues from "./core/issues.ts";
 import * as llm from "./core/llm.ts";
 import * as privacy from "./core/privacy.ts";
 import * as review from "./core/review.ts";
+import * as freshness from "./core/freshness.ts";
+import * as settings from "./core/settings.ts";
 import * as source_id from "./core/source_id.ts";
 
 const BACKEND = "local";
 const STATUSES = ["requested", "in_progress", "done"];
-export const DOCS_DIR = path.resolve(process.env.DOCS_DIR || path.join(BASE_DIR, "output"));   // 시험은 DOCS_DIR 로 테스트 전용 폴더를 쓴다(운영 output/ 을 건드리지 않게)
+export const DOCS_DIR = docs_dir();        // 시작 때 값 (참고용). 실제 요청은 docs_dir() 를 다시 계산한다 — dispatcher 가 쓰는 폴더와 늘 같다 (D5-74)
+const DOCS_ROOT = (): string => docs_dir();   // 시험은 DOCS_DIR 로 테스트 전용 폴더를 쓴다(운영 output/ 을 건드리지 않게)
 const DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const KST_OFFSET_MS = 9 * 3600_000;   // schema.sql 의 now() at time zone 'Asia/Seoul'
 
@@ -97,18 +102,64 @@ export async function latest_severity(): Promise<Row[]> {
     (order[a.grade] ?? 4) - (order[b.grade] ?? 4) || safe(b) - safe(a) || b.score - a.score);
 }
 
-export async function get_zones(): Promise<Row[]> {
-  return _rows("SELECT id, name FROM zone ORDER BY id");
+/** 화면에 나가는 유형 등급을 관제 카드 등급과 한 출처로 맞춘다 (D5-82): 유형에 보이는 카드가 있으면 그중 가장 높은 카드 등급을 쓴다.
+ *  카드가 없는 유형(낮음·카드 없음)은 유형 등급 그대로. 요청서에 적힌 등급(작성 당시)은 건드리지 않는다. */
+export function unify_grades(sev: Row[], cards: Row[]): Row[] {
+  const order: Record<string, number> = { immediate: 0, high: 1, mid: 2, low: 3 };
+  const best = new Map<string, string>();
+  for (const c of cards) {
+    const cur = best.get(c.label);
+    if (cur === undefined || (order[c.grade] ?? 4) < (order[cur] ?? 4)) best.set(c.label, c.grade);
+  }
+  return sev.map((s) => (best.has(s.label) ? { ...s, grade: best.get(s.label) } : s));
 }
+
+export async function get_zones(): Promise<Row[]> {
+  // 방문객 구역 선택 — 운영자가 숨긴 구역은 뺀다 (D5-90).
+  return _rows("SELECT id, name FROM zone WHERE COALESCE(hidden, 0) = 0 ORDER BY id");
+}
+
+/** 설정 화면용 (읽기 전용·공개): 축제·구역(숨긴 것 포함)·유형별 담당 부서/연락처(is_example = 기본 예시 번호). schema.sql 의 get_settings() 와 같은 모양. */
+export async function get_settings(): Promise<Row> {
+  return settings.get_settings();
+}
+
+/** 설정 쓰기 (운영자 코드 필요 — ADMIN_RPC). 입력 검사 문구는 ApiError(400)로 나간다. schema.sql 의 같은 이름 RPC 와 규칙이 같다. */
+async function _settings_call<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (isKind(e, "ValueError")) throw new ApiError((e as Error).message);
+    throw e;
+  }
+}
+export const save_festival = (p_name: unknown, p_region: unknown, p_start_date: unknown, p_end_date: unknown) =>
+  _settings_call(() => settings.save_festival(p_name, p_region, p_start_date, p_end_date));
+export const add_zone = (p_name: unknown) => _settings_call(() => settings.add_zone(p_name));
+export const rename_zone = (p_id: unknown, p_name: unknown) => _settings_call(() => settings.rename_zone(p_id, p_name));
+export const set_zone_hidden = (p_id: unknown, p_hidden: unknown) => _settings_call(() => settings.set_zone_hidden(p_id, p_hidden));
+export const save_department = (p_label: unknown, p_department: unknown, p_contact: unknown) =>
+  _settings_call(() => settings.save_department(p_label, p_department, p_contact));
 
 export async function get_festival(): Promise<Row | null> {
   // 방문객 접수 화면 머리글용. Supabase 에서는 festival 테이블 anon 읽기.
   return _one("SELECT name FROM festival ORDER BY id LIMIT 1");
 }
 
+/** 관제 머리에 보일 알림 3건 — 같은 시각에 알림이 여러 개 나도 안전·혼잡 같은 높은 등급이 가려지지 않게 (D5-61).
+ *  유형의 현재 등급(즉시 > 높음 > 보통 > 낮음) 먼저, 같으면 최신(id 큰 쪽) 먼저. 등급을 모르는 유형은 맨 뒤. */
+export function pick_alerts(all: Row[], sev: Row[], n = 3): Row[] {
+  const order: Record<string, number> = { immediate: 0, high: 1, mid: 2, low: 3 };
+  const rank = new Map(sev.map((s) => [s.label, order[s.grade] ?? 4]));
+  return [...all].sort((a, b) => (rank.get(a.label) ?? 4) - (rank.get(b.label) ?? 4) || b.id - a.id).slice(0, n);
+}
+
 export async function get_control(): Promise<Row> {
+  const cards = await issues.list_active();
+  const sev = unify_grades(await latest_severity(), cards);      // 카드와 같은 등급 (D5-82)
+  const unacked = await _rows("SELECT * FROM alert WHERE acked=0 ORDER BY id DESC LIMIT 200");
   return {
-    sev: await latest_severity(),
+    sev,
     briefing: await _one("SELECT * FROM briefing ORDER BY id DESC LIMIT 1"),
     feed: await _rows(
       `SELECT f.id, f.raw_text, f.ingested_at, f.zone_id, c.label, c.status,
@@ -123,14 +174,21 @@ export async function get_control(): Promise<Row> {
     review_items: await review.items(20),
     // 관제 '지금 조치할 일' 카드 (화면 순서). issue 표의 열 그대로 — Supabase 에서도 같은 모양.
     // actions·evidence_quotes·latest_quotes 는 JSON 문자열, grp: main|more|in_progress|done
-    issues: await issues.list_active(),
+    issues: cards,
     total: (await _one("SELECT COUNT(*) n FROM feedback WHERE deleted_at IS NULL"))!.n,
     deleted: await db.deleted_count(),                 // 운영자가 지운(숨긴) 민원 수 — 되돌리기용
     crowding: await intake.zone_burst(),                // 한 구역에 접수가 몰림 — 차단 없이 표시만 (D5-33 ③)
     backend_llm: llm.backend(),                         // 헤더 표시용: claude_code | anthropic | local (webapi 프로세스 기준)
     synthetic: await db.synthetic_in_window(),          // 창 안에 replay/demo/dev 합성 민원이 있으면 on=true + count
-    alerts: await _rows("SELECT * FROM alert WHERE acked=0 ORDER BY id DESC LIMIT 3"),
+    alerts: pick_alerts(unacked, sev),                  // 화면에 보일 3건 (등급 → 최신 순)
+    alerts_total: (await _one("SELECT COUNT(*) n FROM alert WHERE acked=0"))!.n,      // 확인 안 한 알림 전체 개수 (KPI 용)
+    fresh: await get_freshness(),                       // 마지막 갱신·에이전트 마지막 동작 시각 (D5-86)
   };
+}
+
+/** 마지막 갱신 시각 (공개 읽기) — 화면이 '몇 초 전 갱신'·정체 경고를 그린다. schema.sql 의 get_freshness() 와 같은 모양. */
+export async function get_freshness(): Promise<Row> {
+  return { ...(await freshness.get_freshness()) };
 }
 
 export async function get_action(): Promise<Row> {
@@ -139,11 +197,11 @@ export async function get_action(): Promise<Row> {
     // Storage 대역 URL 이 생기기 전에 만든 요청서도 DOCX 버튼이 뜨게 한다
     if (!a.doc_url && a.doc_path) {
       const name = path.basename(String(a.doc_path).replace(/\\/g, "/"));
-      if (isFile(path.join(DOCS_DIR, name))) a.doc_url = `/api/docs/${quote(name)}`;
+      if (isFile(path.join(DOCS_ROOT(), name))) a.doc_url = `/api/docs/${quote(name)}`;
     }
   }
   return {
-    sev: await latest_severity(),
+    sev: unify_grades(await latest_severity(), await issues.list_active()),     // 관제 카드와 같은 등급 (D5-82)
     actions,
     jobs: await _rows("SELECT * FROM doc_job ORDER BY id DESC LIMIT 30"),
   };
@@ -179,7 +237,6 @@ export async function request_doc(p_label: unknown): Promise<number> {
   if (busy) return busy.id;
   const conn = await db.connect();
   const cur = await conn.execute("INSERT INTO doc_job (label, created_at) VALUES (?,?)", [p_label, seoul_now()]);
-  await conn.commit();
   return cur.lastrowid as number;
 }
 
@@ -187,7 +244,6 @@ export async function set_action_status(p_id: unknown, p_status: unknown): Promi
   if (!STATUSES.includes(p_status as string)) throw new ApiError(`잘못된 상태: ${p_status}`);
   const conn = await db.connect();
   await conn.execute("UPDATE action_request SET status=?, closed_at=? WHERE id=?", [p_status, p_status === "done" ? seoul_now() : null, p_id]);
-  await conn.commit();
   return null;
 }
 
@@ -235,6 +291,33 @@ export async function list_deleted(p_limit: unknown = 50): Promise<Row> {
   return { ok: true, items: await db.list_deleted(n) };
 }
 
+/** 개발자 보기에 나가는 호출이 너무 잦을 때 (429). */
+export class TooManyRequests extends admin.AdminError {
+  constructor() { super("잠시 후 다시 보세요", 429); }
+}
+export const DEV_LIMIT = 60;                 // 출처별 1분당 호출 수
+export const DEV_LIMIT_SHARED = 240;         // 출처를 모를 때 전체 공용
+const _dev_hits = new Map<string, number[]>();
+
+/** 출처별 1분 60번 (메모리). 출처를 모르면 전체 공용 바구니(240번). 넘으면 TooManyRequests. */
+export function dev_rate_check(source: string | null, now_ms = Date.now()): void {
+  const key = source || "*";
+  const limit = source ? DEV_LIMIT : DEV_LIMIT_SHARED;
+  const hits = (_dev_hits.get(key) ?? []).filter((t) => now_ms - t < 60_000);
+  if (hits.length >= limit) { _dev_hits.set(key, hits); throw new TooManyRequests(); }
+  hits.push(now_ms);
+  _dev_hits.set(key, hits);
+  if (_dev_hits.size > 5000) for (const [k, v] of _dev_hits) if (!v.some((t) => now_ms - t < 60_000)) _dev_hits.delete(k);   // 오래된 출처 정리
+}
+
+/** 개발자 보기 (D5-62) — 에이전트 로그·최근 분류·심각도 내부값·카드 내부값·워커 상태. **공개 읽기 전용**(운영자 코드 없음, p_code 는 받아도 무시).
+ *  schema.sql 의 dev_feed(p_code, p_since_log, p_since_cls) 와 같은 모양. 모든 글자는 devfeed.redact 로 가린다.
+ *  점수·계산식이 들어 있어 방문객용 응답(/api/control)에는 절대 넣지 않는다. */
+export async function dev_feed(p_since_log: unknown = 0, p_since_cls: unknown = 0, source: string | null = null): Promise<Row> {
+  dev_rate_check(source);
+  return devfeed.dev_feed(p_since_log, p_since_cls);
+}
+
 /** 운영자 코드가 맞는지만 확인한다 (코드 입력 창용). 검사는 call_rpc 가 한다. */
 export async function check_admin(): Promise<boolean> {
   return true;
@@ -252,7 +335,15 @@ export const RPC: Record<string, RpcSpec> = {
   dismiss_review: [dismiss_review, ["p_id"], []],
   reopen_review: [reopen_review, ["p_id"], []],
   list_deleted: [list_deleted, [], ["p_limit"]],
+  dev_feed: [dev_feed, [], ["p_since_log", "p_since_cls"]],
   check_admin: [check_admin, [], []],
+  get_settings: [get_settings, [], []],
+  get_freshness: [get_freshness, [], []],
+  save_festival: [save_festival, ["p_name", "p_region", "p_start_date", "p_end_date"], []],
+  add_zone: [add_zone, ["p_name"], []],
+  rename_zone: [rename_zone, ["p_id", "p_name"], []],
+  set_zone_hidden: [set_zone_hidden, ["p_id", "p_hidden"], []],
+  save_department: [save_department, ["p_label", "p_department", "p_contact"], []],
 };
 // 관리자 동작 — 운영자 코드(X-Admin-Code 헤더 또는 p_code)가 맞을 때만 실행한다 (D5-31).
 // 방문객이 쓰는 것은 submit_feedback 하나뿐이다. schema.sql 의 같은 이름 RPC 는 p_code 인자로 같은 검사를 한다.
@@ -268,7 +359,8 @@ function _log_error(where: string, e: unknown): void {
   console.error(`[webapi] 오류 ${where}: ${err?.name ?? "Error"}: ${err?.message ?? e}`);
 }
 export const ADMIN_RPC = new Set(["request_doc", "set_action_status", "delete_feedback", "restore_feedback",
-  "resolve_review", "dismiss_review", "reopen_review", "list_deleted", "check_admin"]);
+  "resolve_review", "dismiss_review", "reopen_review", "list_deleted", "check_admin",
+  "save_festival", "add_zone", "rename_zone", "set_zone_hidden", "save_department"]);
 
 /** RPC 하나를 실행한다. 관리자 동작이면 먼저 운영자 코드를 검사한다.
  *  코드 거부는 admin.AdminError(status 401/403/429), 검증 오류는 ApiError, 모르는 인자는 BadRequest.
@@ -285,12 +377,15 @@ export async function call_rpc(name: string, args: Row, code: string | null = nu
   for (const k of required) if (!(k in a)) throw new BadRequest(`missing argument '${k}'`);
   const vals = [...required, ...optional].filter((k) => k in a).map((k) => a[k]);
   if (name === "submit_feedback") return fn(a.p_zone_id, a.p_text, source);   // 출처별 폭주 제한용 (D5-33 ②)
+  if (name === "dev_feed") return fn(a.p_since_log ?? 0, a.p_since_cls ?? 0, source);   // 공개 읽기 — 출처별 호출 제한용 (D5-62)
   return fn(...vals);
 }
 
 const GET: Record<string, () => Promise<unknown>> = {
   "/api/zones": get_zones,
   "/api/festival": get_festival,
+  "/api/settings": get_settings,
+  "/api/freshness": get_freshness,
   "/api/control": get_control,
   "/api/action": get_action,
 };
@@ -370,10 +465,10 @@ const header = (req: Req, name: string): string | null => {
   return Array.isArray(v) ? v[0] : (v ?? null);
 };
 
-async function adminGet(req: Req, res: Res, rpcName: string): Promise<void> {
+async function adminGet(req: Req, res: Res, rpcName: string, args: Row = {}, whole = false): Promise<void> {
   try {
-    const data = (await call_rpc(rpcName, {}, header(req, "x-admin-code"), clientSource(req))) as Row;
-    send(res, 200, { backend: BACKEND, data: data.items });
+    const data = (await call_rpc(rpcName, args, header(req, "x-admin-code"), clientSource(req))) as Row;
+    send(res, 200, { backend: BACKEND, data: whole ? data : data.items });
   } catch (e) {
     if (e instanceof admin.AdminError) return send(res, e.status, { error: e.message });   // 401 · 403 · 429 — POST 와 같은 규칙
     _log_error(`GET ${rpcName}`, e);
@@ -385,6 +480,17 @@ async function doGet(req: Req, res: Res): Promise<void> {
   const pathname = new URL(req.url ?? "/", "http://x").pathname;
   if (pathname === "/api/events") return events(req, res);
   if (pathname.startsWith("/api/docs/")) return doc(res, safeDecode(pathname.slice("/api/docs/".length)));
+  if (pathname === "/api/dev") {                                               // 개발자 보기 — 공개 읽기 (코드 없음), 출처별 호출 제한
+    const qs = new URL(req.url ?? "/", "http://x").searchParams;
+    try {
+      const data = await call_rpc("dev_feed", { p_since_log: qs.get("since_log") ?? 0, p_since_cls: qs.get("since_cls") ?? 0 }, null, clientSource(req));
+      return send(res, 200, { backend: BACKEND, data });
+    } catch (e) {
+      if (e instanceof TooManyRequests) return send(res, 429, { error: e.message });
+      _log_error("GET /api/dev", e);
+      return send(res, 500, { error: "서버 오류" });
+    }
+  }
   if (pathname === "/api/deleted") return adminGet(req, res, "list_deleted");   // 관리자 전용 읽기 — X-Admin-Code 헤더 (한글 코드는 POST /api/rpc/list_deleted 의 p_code)
   const fn = GET[pathname];
   if (!fn) return send(res, 404, { error: "없는 경로" });
@@ -449,9 +555,10 @@ async function doPost(req: Req, res: Res): Promise<void> {
 
 /** DOCS_DIR 의 DOCX 만 내준다. 경로 탈출(../, 절대경로, 하위 폴더)은 막는다. */
 function doc(res: Res, name: string): void {
-  const target = path.resolve(DOCS_DIR, name);
+  const root = DOCS_ROOT();
+  const target = path.resolve(root, name);
   if (!name || /[\\/]/.test(name) || name !== path.basename(name) || !name.endsWith(".docx")
-      || path.dirname(target) !== DOCS_DIR || !isFile(target)) return send(res, 404, { error: "없는 문서" });
+      || path.dirname(target) !== root || !isFile(target)) return send(res, 404, { error: "없는 문서" });
   const data = fs.readFileSync(target);
   res.writeHead(200, {
     "Content-Type": DOCX_TYPE,

@@ -44,7 +44,7 @@ export async function resolve(feedback_id: number, label: string, is_safety: boo
   const r = await _get(conn, feedback_id);
   if (!r) throw new KeyError(MSG_MISSING);
   if (r.status !== "review") throw new ValueError(MSG_DONE);
-  // 안전·혼잡을 고르면 자동으로 안전 의심, 긍정은 안전이 아니다. 그 밖에는 운영자가 고른 값, 없으면 모델이 준 값
+  // 안전을 고르면 자동으로 안전 의심, 긍정은 안전이 아니다. 혼잡을 포함한 그 밖에는 운영자가 고른 값, 없으면 모델이 준 값 (D5-59: 혼잡이라고 안전은 아니다)
   let safe: number;
   if (config.SAFETY_LABELS.has(label)) safe = 1;
   else if (label === "positive") safe = 0;
@@ -58,7 +58,6 @@ export async function resolve(feedback_id: number, label: string, is_safety: boo
      WHERE feedback_id=? AND status='review'`,
     [label, safe, `운영자 지정 (모델 제안: ${sug})`, ts ?? db.now(), feedback_id]);
   if (cur.rowcount === 0) throw new ValueError(MSG_DONE);
-  await conn.commit();
   const sentiment = r.sentiment;
   // 같은 문장이 다시 오면 운영자 지정을 쓴다 (리플레이 반복 대비)
   await db.cache_put(_digest(r.raw_text), {
@@ -77,7 +76,6 @@ export async function dismiss(feedback_id: number, ts: string | null = null): Pr
      SET status='dismissed', reviewed_at=?, review_action='dismissed', decided_by='operator'
      WHERE feedback_id=? AND status='review'`, [ts ?? db.now(), feedback_id]);
   if (cur.rowcount === 0) throw new ValueError(MSG_DONE);
-  await conn.commit();
 }
 
 /** 운영자 처리(닫기·유형 지정)를 되돌려 다시 '확인 필요'로. */
@@ -98,7 +96,6 @@ export async function reopen(feedback_id: number): Promise<void> {
   if (was_label) {                       // 지정하며 넣어 둔 같은 문장 캐시는 지운다
     await conn.execute("DELETE FROM classify_cache WHERE hash=?", [_digest(r.raw_text)]);
   }
-  await conn.commit();
 }
 
 /** 운영자가 처리할 확인 필요 목록. 안전 의심이 먼저, 그 안에서는 오래된 것 먼저 (최대 limit건). */

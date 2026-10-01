@@ -7,17 +7,17 @@ import type { ControlData } from "../data";
 import { esc } from "../ui";
 
 export function kpiRow(d: ControlData): string {
-  const issues = d.issues ?? [];
+  const issues = d.issues;
   const main = issues.filter((i) => i.grp === "main").length;
   const more = issues.filter((i) => i.grp === "more").length;
-  const review = d.review ?? 0;
-  const safe = d.review_safety ?? 0;
-  const alerts = d.alerts.length;
+  const review = d.review;
+  const safe = d.review_safety;
+  const alerts = d.alerts_total;
   const cards: [string, string, string, string][] = [
     ["kpi-total", "접수 누적", String(d.total), d.pending ? `분류 대기 ${d.pending}건` : ""],
-    ["kpi-todo", "조치할 일", String(main), issues.length ? `그 밖 ${more}건` : ""],
+    ["kpi-todo", "조치할 일", String(main), more ? `그 밖에 ${more}건 더 있음` : ""],
     ["kpi-review", "확인 필요", String(review), review ? `안전 의심 ${safe}건` : ""],
-    ["kpi-alert", "확인 안 한 알림", String(alerts), alerts >= 3 ? "최근 3건까지 표시" : ""],
+    ["kpi-alert", "확인 안 한 알림", String(alerts), alerts > d.alerts.length ? `등급 높은 ${d.alerts.length}건 표시` : ""],
   ];
   return `<section class="kpis" aria-label="요약">${cards.map(([id, label, value, sub]) =>
     `<div class="kpi" id="${id}"><span class="kpi-l">${esc(label)}</span><b class="kpi-v">${esc(value)}</b>${sub ? `<span class="kpi-s">${esc(sub)}</span>` : ""}</div>`).join("")}</section>`;

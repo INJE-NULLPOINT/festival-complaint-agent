@@ -9,7 +9,12 @@ export type Row = Record<string, any>;
 // 순서가 중요하다. 위에서부터 먼저 걸리는 것을 택한다.
 export const KEYWORDS: [string, string[]][] = [
   ["safety", ["넘어", "어두", "조명", "불이 없", "불이 하나", "미끄러", "난간",
-    "위험", "헛디", "다칠", "사고", "깜깜"]],
+    "위험", "헛디", "다칠", "사고", "깜깜",
+    "불났", "불이 났", "화재", "연기", "다쳤", "다침", "쓰러", "기절", "가스", "폭발", "붕괴",     // D5-72: 긴급 신호도 안전으로
+    "물에 빠", "강에 빠", "익수", "떠내려", "구명조끼가 없", "구명조끼 없", "구명이 필요",         // D5-75: 남강 수면(유등) — D5-80: 구 단위로 좁힘
+    "전선", "누전", "스파크", "합선",                                                                //   ('물에 젖은', '구명조끼 대여소', '빠짐없이'는 안전이 아니다)
+    "불똥", "파편", "불티", "폭죽이 사람",
+    "큰일 날 것", "큰일 날 거", "큰일날 것", "큰일날 거", "큰일 나겠", "큰일나겠", "큰일이 날"]],                 // D5-86: 구절 단위 — '큰일 났어요'(지난 일)·'큰일이네'는 안전이 아니다                                                          // D5-81: 불꽃놀이 낙하물 (구 단위 — '불꽃놀이 몇 시예요' 는 안전이 아니다. 패턴은 FIREWORK_DANGER)
   ["crowd", ["인파", "사람이 너무", "밀려", "몰려", "붐벼", "혼잡", "압사"]],
   ["parking", ["주차", "셔틀", "갓길", "차가 못", "차량", "견인", "정체"]],
   ["restroom", ["화장실", "휴지", "변기", "세면"]],
@@ -32,19 +37,52 @@ export const MATCHED_CONFIDENCE = 0.55;      // 규칙 기반이라 신뢰도를
 export const UNMATCHED_CONFIDENCE = 0.25;    // 미분류. config.REVIEW_CONFIDENCE 아래 → review
 export const LOW_CONFIDENCE = 0.4;           // 이 아래는 인용 후보에서 후순위
 
+// 혼잡 중 위험 신호(압사·밀림 등)가 있는 것만 안전으로 본다. 단순히 줄이 길다·붐빈다는 안전이 아니다 (D5-59, 판단 기준 양식과 같은 기준).
+export const CROWD_DANGER = ["압사", "밀려", "밀치", "다칠", "쓰러", "끼일", "위험"];
+
+/**
+ * 불꽃놀이 낙하·충돌 위험 (D5-81): '불꽃이 관람석으로 떨어져요'처럼 사이에 말이 끼는 문장을 잡는다. 구 단위라 '불꽃놀이 몇 시예요'·'불꽃놀이가 예뻤어요'는 걸리지 않는다.
+ * memory.risk_signals 도 같은 패턴을 쓴다.
+ */
+export const FIREWORK_DANGER = /(?:불꽃|폭죽|불똥)[^.!?\n]{0,14}(?:떨어|튀어|튀었|날아|맞았|맞아|터져서\s*(?:다|사람|아이))/;
+
+/**
+ * 명시적 생명위험어 (D5-83) — 이 말이 든 안전 민원은 **1건이어도 즉시** 등급이다 (압사·질식·쓰러짐·의식 없음·불/화재·물에 빠짐·감전 등).
+ * 일반 안전(난간 흔들림·조명 없음 같은 시설 불편)은 1~2건이면 '높음'까지, 3건 이상이면 즉시(S-04). 공백을 뺀 글에서 찾는다.
+ */
+export const LIFE_DANGER_TERMS = ["압사", "질식", "쓰러", "의식이없", "의식을잃", "의식불명", "숨을못", "숨이안", "숨쉬기힘", "숨쉴수없", "심정지", "호흡곤란",
+  "불났", "불이났", "불이붙", "불길", "화재", "폭발", "붕괴", "무너", "깔렸", "깔려", "감전", "익수", "물에빠", "강에빠", "떠내려",
+  "가스누출", "가스가새", "가스냄새", "흉기", "찔렸"];
+
+/** 글에 명시적 생명위험어가 있는가. */
+export function life_danger(text: string | null | undefined): boolean {
+  const flat = String(text ?? "").replace(/\s+/g, "");
+  return LIFE_DANGER_TERMS.some((k) => flat.includes(k));
+}
+
+/** 한 유형의 키워드(또는 안전의 불꽃 패턴)가 글에 걸리는가. */
+function hit(label: string, keys: string[], text: string): boolean {
+  return keys.some((k) => text.includes(k)) || (label === "safety" && FIREWORK_DANGER.test(text));
+}
+
+/** 글에 키워드가 걸린 유형 전부 (순서는 KEYWORDS). 둘 이상이면 원인이 섞인 애매한 민원이다. */
+export function matched_labels(text: string): string[] {
+  return KEYWORDS.filter(([label, keys]) => hit(label, keys, text)).map(([label]) => label);
+}
+
 /** 민원 1건 → 분류 결과. 실제 에이전트와 같은 모양으로 돌려준다. */
 export function classify(text: string): Row {
   for (const [label, keys] of KEYWORDS) {
-    if (keys.some((k) => text.includes(k))) return _result(label, true);
+    if (hit(label, keys, text)) return _result(label, true, text);
   }
   return _result(FALLBACK_LABEL, false);
 }
 
-function _result(label: string, matched: boolean): Row {
+function _result(label: string, matched: boolean, text = ""): Row {
   return {
     label,
     sentiment: SENTIMENT[label] ?? -0.5,
-    is_safety: config.SAFETY_LABELS.has(label),
+    is_safety: config.SAFETY_LABELS.has(label) || (label === "crowd" && CROWD_DANGER.some((k) => text.includes(k))),
     confidence: matched ? MATCHED_CONFIDENCE : UNMATCHED_CONFIDENCE,
     note: matched ? "키워드 규칙 일치 (local 대역)"
       : "규칙 미일치 — 미분류 (local 대역). 실제 에이전트가 재분류해야 함",

@@ -37,6 +37,10 @@ const tryExec = (fn: () => void) => { try { fn(); } catch { /* 예전 스키마 
 // 점검이 모두 '시도가 너무 많습니다' 로 깨진다. 복사본에만 적용된다.
 tryExec(() => run("DELETE FROM admin_attempt"));
 
+// 복사본에는 워커가 없다 — 운영 DB 의 옛 worker_status 시각이 그대로 오면 화면이 '에이전트 멈춤'으로 바뀐다(D5-86). 먼 미래 시각으로 둬 멈춤 표시를 막는다.
+// (멈춤 표시 자체는 admin_flow 가 dev_feed 응답을 바꿔서 따로 본다)
+tryExec(() => run("UPDATE worker_status SET last_at = '2099-01-01T00:00:00'"));
+
 const iso = (dt: Date) => dt.toISOString().slice(0, 19);                     // 'YYYY-MM-DDTHH:MM:SS' (UTC 기준 그대로 — 시험용 시각)
 const localIso = (s: string) => new Date(s + "Z");                           // 시각 문자열을 시간대 없이 다룬다 (더하고 빼기만 한다)
 

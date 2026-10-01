@@ -53,6 +53,12 @@ export function median(v: number[]): number {
   if (!n) throw new Error("no median for empty data");
   return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
 }
+/** 백분위수 — 최근접 순위(nearest-rank): 정렬한 값의 ceil(p/100·n) 번째. 표본이 작아도 실제 측정값 중 하나만 돌려준다(보간 없음). */
+export function percentile(v: number[], p: number): number {
+  const s = [...v].sort((a, b) => a - b);
+  if (!s.length) throw new Error("percentile of empty data");
+  return s[Math.min(s.length, Math.max(1, Math.ceil(p / 100 * s.length))) - 1];
+}
 /** statistics.stdev (표본 표준편차, n-1) */
 export function stdev(v: number[]): number {
   const n = v.length;

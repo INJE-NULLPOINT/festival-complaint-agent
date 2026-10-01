@@ -21,6 +21,7 @@
 // 종료 코드: 0 전부 통과 · 1 실패 있음
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -34,10 +35,14 @@ const NODE = process.execPath;
 const PRESERVE = [path.join(ROOT, "tests", "testcase_report.md")];
 const KEY_ENV = ["ANTHROPIC_API_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY", "SUPABASE_KEY"];
 
+// 시험이 만드는 조치요청서 DOCX 는 운영 output/ 이 아니라 이 임시 폴더로 간다 (D5-74)
+const DOCS_TMP = fs.mkdtempSync(path.join(os.tmpdir(), "festival_final_docs_"));
+
 function childEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) if (!KEY_ENV.includes(k)) env[k] = v;
   Object.assign(env, { LLM_BACKEND: "local", SUPABASE_DB_URL: "", SUPABASE_URL: "", SUPABASE_SERVICE_KEY: "", VITE_SUPABASE_URL: "", VITE_SUPABASE_ANON_KEY: "" });
+  env.DOCS_DIR = DOCS_TMP;
   delete env.DB_PATH;          // 운영 DB 경로를 물려주지 않는다 (시험이 각자 복사본을 만든다)
   return env;
 }

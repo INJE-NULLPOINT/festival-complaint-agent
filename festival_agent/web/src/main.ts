@@ -8,19 +8,23 @@ import { api, onHeaderMeta } from "./data";
 import { LABELS, resetFresh, stateBox, toast } from "./ui";
 import { renderAction } from "./views/action";
 import { renderControl } from "./views/control";
+import { initDev } from "./dev";
+import { ago, initHeartbeat, type Beat } from "./heartbeat";
 import { renderQr } from "./views/qr";
+import { renderSettings } from "./views/settings";
 import { renderReport } from "./views/report";
 
 const app = document.getElementById("app")!;
 const live = document.getElementById("live")!;
 const visitor = new URLSearchParams(location.search).get("v") === "qr";
 
-const TITLES: Record<string, string> = { control: "관제", action: "조치", report: "접수 QR" };
+const TITLES: Record<string, string> = { control: "관제", action: "조치", report: "접수 QR", settings: "설정" };
 const views: Record<string, (root: HTMLElement) => Promise<void>> = {
   control: renderControl,
   action: renderAction,
   // 관리자의 '접수 QR' 는 QR 만들기 화면, 방문객(?v=qr)은 접수 화면이다 (둘 다 경로 이름은 report)
   report: visitor ? renderReport : renderQr,
+  settings: visitor ? renderReport : renderSettings,      // 방문객(?v=qr)은 어떤 해시로 와도 접수 화면만
 };
 
 function route(): string {
@@ -119,6 +123,29 @@ function connection(ok: boolean): void {
   }
 }
 
+// 에이전트 멈춤 (D5-86): 워커가 2분 넘게 아무 일도 안 했으면 배너 + 헤더 배지로 알린다. 평소에는 "마지막 판단 N분 전"만 조용히 보인다.
+// 시각을 못 받으면(beat === null) 아무것도 바꾸지 않는다.
+let connOk = false;
+let beat: Beat = null;
+const seen = document.createElement("span");
+seen.id = "last-seen";
+seen.className = "muted small";
+const workerBanner = document.createElement("div");
+workerBanner.id = "worker-banner";
+workerBanner.setAttribute("role", "status");
+workerBanner.hidden = true;
+function paintLive(): void {
+  const stopped = connOk && !!beat?.stale;
+  live.textContent = `${stopped ? "에이전트 멈춤" : connOk ? "실시간" : "재연결 중"} · ${backendName}`;
+  live.classList.toggle("ok", connOk && !stopped);
+}
+function paintBeat(): void {
+  seen.textContent = beat && beat.agentAgeMs !== null ? `마지막 판단 ${ago(beat.agentAgeMs)}` : "";
+  workerBanner.hidden = !beat?.stale;
+  if (beat?.stale) workerBanner.innerHTML = `새 민원이 들어와도 분류되지 않을 수 있습니다 — 에이전트가 멈춘 것 같습니다 · 마지막 동작 ${ago(beat.workerAgeMs)} <span>관리자에게 연락해 주세요</span>`;
+  paintLive();
+}
+
 function subscribe(): void {
   api.subscribe({
     onChange: refresh,
@@ -128,8 +155,8 @@ function subscribe(): void {
     },
     onDocDone: (j) => toast(`${LABELS[j.label] ?? j.label} 조치요청서가 만들어졌습니다`),
     onStatus: (ok) => {
-      live.textContent = `${ok ? "실시간" : "재연결 중"} · ${backendName}`;
-      live.classList.toggle("ok", ok);
+      connOk = ok;
+      paintLive();
       connection(ok);
     },
   });
@@ -137,7 +164,7 @@ function subscribe(): void {
 
 // 관리자 화면 뼈대: 사이드바 · 햄버거(좁은 화면) · 본문 제목 줄. 방문객 화면에는 아예 만들지 않는다 (DOM 에서 지운다).
 if (visitor) {
-  for (const id of ["side", "side-scrim", "menu-btn", "page-head"]) document.getElementById(id)?.remove();
+  for (const id of ["side", "side-scrim", "menu-btn", "page-head", "dev-toggle"]) document.getElementById(id)?.remove();
 } else {
   const menuBtn = document.getElementById("menu-btn")!;
   const scrim = document.getElementById("side-scrim")!;
@@ -151,8 +178,21 @@ if (visitor) {
   scrim.addEventListener("click", () => setMenu(false));
   document.getElementById("tabs")!.addEventListener("click", (e) => { if ((e.target as HTMLElement).closest("a")) setMenu(false); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && document.body.classList.contains("side-open")) { setMenu(false); menuBtn.focus(); } });
+  document.getElementById("page-actions")?.append(seen);
+  banner.after(workerBanner);
+  initHeartbeat((b) => {
+    beat = b; paintBeat();
+  });
+  initDev();       // AI 동작 보기 (D5-62) — 관리자 화면에서만. 방문객 화면에는 이 코드가 돌지 않는다.
   // 사이드바에 축제 이름 (못 받으면 기본 이름 유지)
-  api.festival().then((name) => { if (name) document.getElementById("side-name")!.textContent = name; }).catch(() => {});
+  const paintFestival = () => api.festival().then((name) => {
+    if (!name) return;
+    document.getElementById("side-name")!.textContent = name;
+    const strong = document.querySelector(".brand strong");
+    if (strong) strong.textContent = name;
+  }).catch(() => {});
+  void paintFestival();
+  window.addEventListener("festival-changed", () => void paintFestival());     // 설정 화면에서 축제 이름을 바꾸면 사이드바·헤더가 바로 따라 바뀐다 (D5-90)
 }
 if (visitor) {
   document.body.classList.add("visitor");

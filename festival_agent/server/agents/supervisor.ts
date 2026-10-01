@@ -79,6 +79,7 @@ export const read_agent_results = tool({
     window_min: { type: "integer", description: "심각도 창(분). ②감시가 쓴 값과 같아야 한다" },
   },
   params: ["since_min", "window_min"],
+  cacheable: true,
 }, async (since_min: number = 60, window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Row> => {
   const cutoff = isoformat(plus(new Date(), -minutes(since_min)));
   const ranked = await db.ranked(window_min);
@@ -112,6 +113,7 @@ export const rank_actions = tool({
     "이미 조치 중인 건은 순위에서 내려간다.",
   properties: { window_min: { type: "integer", description: "심각도 창(분)" } },
   params: ["window_min"],
+  cacheable: true,
 }, async (window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Row[]> => {
   const ranked = await db.ranked(window_min);
   const statuses = await db.latest_action_status();
@@ -189,7 +191,6 @@ export const write_briefing = tool({
      VALUES (?,?,?,?,?,?,?)`,
     [await db.festival_id(), top_label === "none" ? null : top_label, text, rationale, db.now(),
       p.top.length ? p.top[0].key : null, p.sig]);
-  await conn.commit();
   return {
     briefing_id: cur.lastrowid,
     cards: { saved: res.saved, template: res.template, ignored: res.ignored, errors: res.errors },
@@ -203,6 +204,7 @@ export const rank_issues = tool({
     "needs_text=true 인 카드는 민원 원문(complaints)을 읽고 문구(title·actions)를 정리해야 한다.",
   properties: { window_min: { type: "integer", description: "심각도 창(분)" } },
   params: ["window_min"],
+  cacheable: true,
 }, async (window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Row> => {
   const p = await issue_cards.plan(window_min);
   const need = new Set<string>(p.need.map((c: Row) => c.key));

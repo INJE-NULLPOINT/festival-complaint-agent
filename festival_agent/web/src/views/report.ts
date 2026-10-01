@@ -1,5 +1,5 @@
 // 접수 — 방문객이 QR 로 들어오는 화면. 이름·연락처는 받지 않는다.
-// 문구는 디자인_화면내용정리.md '📱 사용자용 앱' ①접수 ②완료 ③FAQ 를 따른다 (할일 D5-20).
+// 방문객 접수 ①접수 ②완료 ③FAQ 화면
 //   ?zone=유등터널  또는  ?zone=4   → 그 구역이 미리 선택된 채로 열린다 (QR 마다 다르게)
 // 모양은 흑백 결제 화면 느낌 (제출_준비/stitch/reference_bw_checkout.png). 스타일은 style.css 의 .rp · body.visitor 에만.
 // 접수하면 화면을 바꾸지 않고 <dialog> 모달로 완료를 띄운다 (D5-24). 응급 안내는 모달 맨 아래 한 줄만.
@@ -66,6 +66,7 @@ export async function renderReport(root: HTMLElement): Promise<void> {
     <section class="card narrow rp">
       <h1>불편 신고</h1>
       <p class="rp-lead">이름이나 연락처는 적지 않아도 됩니다.</p>
+      <p class="rp-lead">생명이 위급하면 119·112에 먼저 연락해 주세요.</p>
 
       <form id="rf" class="form rp-form" novalidate>
         <!-- 구역: 행 모양. 투명한 select 가 행 전체를 덮어 누르면 폰 기본 선택창이 열린다 -->

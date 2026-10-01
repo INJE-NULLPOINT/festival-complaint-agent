@@ -48,7 +48,7 @@ test("test_확인필요_유형지정_닫기_되돌리기_상태조건", async (t
     assert.ok((await db.review_count()) === 1 && !(await webapi.get_control()).review_items.map((i: any) => i.id).includes(risky));
     const cached = await db.cache_get(await sha256hex("뭔가 위험한 느낌이에요"));
     assert.ok(cached && cached.label === "safety" && cached.is_safety === true);
-    for (const [label, given, expect] of [["parking", true, 1], ["parking", null, 0], ["positive", true, 0], ["crowd", false, 1]] as const) {
+    for (const [label, given, expect] of [["parking", true, 1], ["parking", null, 0], ["positive", true, 0], ["crowd", false, 0], ["crowd", true, 1], ["crowd", null, 0]] as const) {   // D5-59: 혼잡은 자동 안전이 아니다 (운영자가 고른 값·모델 값을 따른다)
       const f = await reviewRow(db, `분류하기 어려운 민원 ${label}${given === null ? "None" : given ? "True" : "False"}`, { safety: false, suggested: "guide" });
       await webapi.resolve_review(f, label, given);
       assert.equal((await cls(db, f)).is_safety, expect, `${label} ${given}`);
@@ -377,6 +377,8 @@ test("test_운영자코드_관리자RPC는_코드가_맞아야_실행된다", as
       set_action_status: { p_id: 1, p_status: "in_progress" }, request_doc: { p_label: "safety" },
       resolve_review: { p_id: ids[0], p_label: "safety" }, dismiss_review: { p_id: ids[0] }, reopen_review: { p_id: ids[0] },
       check_admin: {}, list_deleted: {},
+      save_festival: { p_name: "축제", p_region: "진주", p_start_date: "2026-10-01", p_end_date: "2026-10-02" }, add_zone: { p_name: "시험 구역" },   // D5-90 설정 쓰기도 운영자 코드가 필요하다
+      rename_zone: { p_id: 1, p_name: "시험 이름" }, set_zone_hidden: { p_id: 1, p_hidden: false }, save_department: { p_label: "parking", p_department: "교통과", p_contact: "055-123-4567" },
     };
     assert.deepEqual(new Set(Object.keys(calls)), new Set(webapi.ADMIN_RPC));
     for (const [name, args] of Object.entries(calls)) {

@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS replay_state (
 export async function ensure(): Promise<void> {
   const conn = await db.connect();
   await conn.executescript(SCHEMA);
-  await conn.commit();
 }
 
 /** CSV → [{posted_at, zone, text}] (posted_at 오름차순). */
@@ -50,7 +49,6 @@ export async function start(csv_path: string, opts: { speed?: number } = {}): Pr
      (id, csv_path, speed, sim_start, wall_start, active, cursor, total)
      VALUES (1,?,?,?,?,1,0,?)`,
     [String(csv_path), speed, rows[0].posted_at, db.now(), rows.length]);
-  await conn.commit();
   return { total: rows.length, speed, sim_start: rows[0].posted_at };
 }
 
@@ -58,7 +56,6 @@ export async function stop(): Promise<void> {
   await ensure();
   const conn = await db.connect();
   await conn.execute("UPDATE replay_state SET active=0 WHERE id=1");
-  await conn.commit();
 }
 
 export async function state(): Promise<Row | null> {
@@ -115,7 +112,6 @@ export async function step(max_batch = 40): Promise<number> {
 
   const conn = await db.connect();
   await conn.execute("UPDATE replay_state SET cursor=? WHERE id=1", [cursor]);
-  await conn.commit();
 
   if (inserted) {
     await db.log_agent("replay", "inject", `${inserted}건`, `시뮬레이션 시각 ${mmdd_hhmm(now_sim)}`, `${cursor}/${rows.length} 진행`);

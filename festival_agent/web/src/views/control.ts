@@ -1,8 +1,8 @@
 // 관제 — 운영요원이 띄워 두는 화면. 실시간 구독으로 다시 그려진다.
 // 읽는 순서를 고정한다: ① 결론(브리핑) → ② 지금 조치할 일 카드(1위 크게·나머지 행) → ③ 알림 → ④ 유형별 순위(접힘)·유입.
 // 3초 안에 "지금 제일 위험한 것 1개" 가 읽혀야 한다 (할일 D5-15). 카드는 '무엇이 · 어디서 · 무엇부터 · 무엇을 할지' 를 한 장에 담는다 (D5-29).
-// 서버가 issues[] 를 아직 안 주면(구버전) 예전 유형 단위 화면(심각도 1위 카드 + 유형 순위)으로 그린다.
 import { storedCode } from "../admin";
+import { contactHtml } from "./contact";
 import { kpiRow } from "./kpi";
 import { api, zones, type DeletedItem, type Issue, type IssueAction, type Quote, type ReviewItem, type Severity } from "../data";
 import {
@@ -28,7 +28,6 @@ const pulseAt = new Map<string, number>();
 const PULSE_MS = 4800;          // 2.4s × 2번 — style.css 의 ic-breath 와 맞춘다
 const prevText = new Map<string, string>();         // 카드별 text_updated_at — 문구가 실제로 바뀐 카드만 강조
 const textChangedAt = new Map<string, number>();
-let prevTop: string | null = null;                  // 지난번 심각도 1위 — 바뀌면 카드가 살짝 바뀐다 (옛 화면)
 
 // 지운(숨긴) 민원 (D5-30). 누르면 서버 응답을 기다리지 않고 바로 숨기고, 서버가 빼 준 뒤에 이 목록에서도 정리한다.
 const hidden = new Set<number>();
@@ -75,18 +74,17 @@ export async function renderControl(root: HTMLElement): Promise<void> {
 
   // 서버가 이미 뺀 민원은 '숨김 대기' 목록에서 정리한다 (다른 곳에서 되돌려도 다시 보이게)
   const present = new Set<number>(d.feed.map((f) => f.id));
-  for (const i of d.issues ?? []) for (const q of jsonList<Quote>(i.latest_quotes)) present.add(q.id);
-  for (const r of d.review_items ?? []) present.add(r.id);
+  for (const i of d.issues) for (const q of jsonList<Quote>(i.latest_quotes)) present.add(q.id);
+  for (const r of d.review_items) present.add(r.id);
   hidden.forEach((id) => { if (!present.has(id)) hidden.delete(id); });
   // 서버가 이미 처리한 확인 필요 항목은 '숨김 대기'에서 정리한다 (되돌려서 다시 확인 필요가 되면 다시 보이게)
-  const reviewIds = new Set((d.review_items ?? []).map((r) => r.id));
+  const reviewIds = new Set(d.review_items.map((r) => r.id));
   hiddenReview.forEach((id) => { if (!reviewIds.has(id)) hiddenReview.delete(id); });
 
-  deletedNow = d.deleted ?? 0;
+  deletedNow = d.deleted;
   const feed = d.feed.filter((f) => !hidden.has(f.id));
-  const rvItems = (d.review_items ?? []).filter((r) => !hidden.has(r.id) && !hiddenReview.has(r.id));
-  const cards = (d.issues ?? []).map(toCard);
-  const hasIssues = cards.length > 0;
+  const rvItems = d.review_items.filter((r) => !hidden.has(r.id) && !hiddenReview.has(r.id));
+  const cards = d.issues.map(toCard);
   const main = cards.filter((c) => c.grp === "main");
   const more = cards.filter((c) => c.grp === "more");
   const prog = cards.filter((c) => c.grp === "in_progress");
@@ -95,20 +93,18 @@ export async function renderControl(root: HTMLElement): Promise<void> {
 
   const b = d.briefing;
   const top = sev[0];
-  const rest = sev.slice(1);
   const gradeOf = new Map(sev.map((s) => [s.label, s.grade]));
 
   // 같은 구간의 건수 순위. 심각도(카드) 순위와 비교해 "건수가 아니라 심각도" 를 보여준다.
   const byCount = [...sev].sort((x, y) => y.freq - x.freq || y.score - x.score);
   const countRank = new Map(byCount.map((s, i) => [s.label, i + 1]));
-  // 카드 화면: 1위 카드의 유형 건수와 건수 1위 유형을 비교. 옛 화면: 심각도 1위 유형과 비교.
-  const mine = hasIssues ? (lead ? { label: lead.label, freq: lead.type_freq } : null) : (top ? { label: top.label, freq: top.freq } : null);
+  // 1위 카드의 유형 건수와 건수 1위 유형을 비교한다.
+  const mine = lead ? { label: lead.label, freq: lead.type_freq } : null;
   const flipped = !!mine && !!byCount[0] && byCount[0].label !== mine.label && byCount[0].freq > mine.freq;
 
   feedFresh.update(feed.map((f) => f.id));
   alertFresh.update(alerts.map((a) => a.id));
   issueFresh.update(cards.map((c) => c.id));
-  const heroSwap = !hasIssues && !!top && prevTop !== null && prevTop !== top.label;
   // 카드 문구(text_updated_at)가 바뀐 카드만 강조한다. 건수·마지막 시각·최신 민원이 바뀐 것은 조용히 갱신.
   const now = Date.now();
   for (const c of cards) {
@@ -124,13 +120,13 @@ export async function renderControl(root: HTMLElement): Promise<void> {
   const snapFeed = flipSnap(root, ".feed li[data-id]", "id");
   const snapCards = flipSnap(root, ".icard[data-key]", "key");
 
-  const rankList = (list: Severity[], startNo: number) => list.length ? `<ol class="rank" start="${startNo}">${list.map((s, i) => {
+  const rankList = (list: Severity[]) => list.length ? `<ol class="rank">${list.map((s, i) => {
     const cr = countRank.get(s.label) ?? 0;
-    const up = cr > i + startNo;   // 건수로는 더 아래인데 심각도로 올라온 유형
+    const up = cr > i + 1;   // 건수로는 더 아래인데 심각도로 올라온 유형
     return `
           <li class="${open.has(s.label) ? "open" : ""}" data-label="${esc(s.label)}">
             <button class="row" type="button">
-              <span class="no">${i + startNo}</span>
+              <span class="no">${i + 1}</span>
               <span class="name">${typeChip(s.label)}</span>
               ${badge(s.grade)}
               <span class="sub">
@@ -147,18 +143,15 @@ export async function renderControl(root: HTMLElement): Promise<void> {
       <h2 class="pg-title">지금 조치할 일${b ? ` <span class="muted small">${hhmm(b.created_at)}</span>` : ""}</h2>
       ${b ? `<p class="brief-text">${leadSentence(b.text)}</p>${b.rationale ? `<p class="brief-why">근거: ${esc(b.rationale.replace(/^\s*근거\s*[:：]\s*/, ""))}</p>` : ""}`
           : `<p class="muted">브리핑 없음</p>`}
-      ${hasIssues && flipped && mine && lead ? `<p class="flip">건수 1위 <b>${esc(name(byCount[0].label))} ${byCount[0].freq}건</b>보다
-        <b>${esc(lead.zone_name ?? "구역 미상")} ${esc(name(mine.label))} ${mine.freq}건</b>이 먼저입니다</p>` : ""}
+      ${flipped && mine && lead ? `<p class="flip">건수 1위 <b>${esc(name(byCount[0].label))} ${byCount[0].freq}건</b>보다
+        <b>${esc(lead.zone_name ?? "구역 미상")} ${esc(name(mine.label))} ${lead.freq}건</b>이 먼저입니다</p>` : ""}
     </section>
 
-    ${hasIssues ? `
     ${main.length ? `<section class="icards" aria-label="조치할 일 카드">${main.map((c, i) => issueCard(c, i + 1, i === 0, zoneName)).join("")}</section>`
       : `<section class="card">${stateBox({ icon: "check", title: "지금 바로 조치할 일 없음" })}</section>`}
     ${group("more", "그 밖", more, main.length + 1, zoneName)}
     ${group("in_progress", "조치 중", prog, 1, zoneName)}
-    ${group("done", "조치 완료", done, 1, zoneName)}`
-    : (top ? hero(top, countRank.get(top.label) ?? 0, flipped && byCount[0] ? byCount[0] : null, heroSwap) : `
-    <section class="card">${stateBox({ icon: "inbox", title: "접수된 민원 없음" })}</section>`)}
+    ${group("done", "조치 완료", done, 1, zoneName)}
 
     ${alerts.length ? `<ul class="alerts" aria-label="미확인 알림">${alerts.map((a) => { const fr = alertFresh.of(a.id); return `
       <li class="alert ${openAlerts.has(a.id) ? "open" : ""}${fr.cls}" style="${fr.style}" data-id="${a.id}">
@@ -171,20 +164,15 @@ export async function renderControl(root: HTMLElement): Promise<void> {
       </li>`; }).join("")}</ul>` : ""}
 
     <div class="grid2">
-      ${hasIssues ? `
       <details class="card typerank" data-grp="rank" ${grpOpen.has("rank") ? "open" : ""}>
         <summary><span class="typerank-t">유형별 순위</span> <span class="muted small">카드 순서의 근거${top ? ` · ${hhmm(top.as_of)} 기준` : ""}</span></summary>
-        ${sev.length ? rankList(sev, 1) : stateBox({ inline: true, icon: "inbox", title: "유형별 순위 없음" })}
-      </details>` : `
-      <section class="card">
-        <h2>그다음 순위 <span class="muted small">${top ? `${hhmm(top.as_of)} 기준` : ""}</span></h2>
-        ${rankList(rest, 2)}
-      </section>`}
+        ${sev.length ? rankList(sev) : stateBox({ inline: true, icon: "inbox", title: "유형별 순위 없음" })}
+      </details>
 
       <section class="card">
-        <h2>실시간 유입 <span class="muted counts">누적 <b>${d.total}</b> · 분류 대기 <b>${d.pending}</b>${reviewCounts(d.review ?? 0, d.review_safety ?? 0, d.review_items !== undefined && (d.review ?? 0) > 0)}${deletedChip(d.deleted ?? 0)}</span></h2>
-        ${d.review_items !== undefined && ((d.review ?? 0) > 0 || rvItems.length) ? rvPanel(rvItems, d.review ?? 0, zoneName) : ""}
-        ${(d.deleted ?? 0) > 0 || dlOpen ? dlPanel() : ""}
+        <h2>실시간 유입 <span class="muted counts">누적 <b>${d.total}</b> · 분류 대기 <b>${d.pending}</b>${reviewCounts(d.review, d.review_safety, d.review > 0)}${deletedChip(d.deleted)}</span></h2>
+        ${d.review > 0 || rvItems.length ? rvPanel(rvItems, d.review, zoneName) : ""}
+        ${d.deleted > 0 || dlOpen ? dlPanel() : ""}
         <ul class="feed">${feed.map((f) => {
           const done = f.status === "done" && f.label;
           const review = f.status === "review";   // 근거 없거나 신뢰도가 낮아 유형을 못 정한 민원 — 운영자가 봐야 한다
@@ -279,7 +267,6 @@ export async function renderControl(root: HTMLElement): Promise<void> {
   flipPlay(root, ".rank li", "label", snapRank);
   flipPlay(root, ".feed li[data-id]", "id", snapFeed);
   flipPlay(root, ".icard[data-key]", "key", snapCards);
-  prevTop = top ? top.label : null;
 }
 
 /** 민원 1건을 바로 숨기고(모든 곳에서) 서버에 알린다. 실패하면 되살린다. 성공하면 5초 동안 [되돌리기]가 뜬다. */
@@ -528,8 +515,8 @@ function issueCard(c: Card, no: number, big: boolean, zoneName: Map<number, stri
   const pOn = c.grade === "immediate" && pa !== undefined && paMs >= 0 && paMs < PULSE_MS;
   if (pa !== undefined && !pOn) pulseAt.delete(c.issue_key);
   const zone = c.zone_name ?? (c.zone_id != null ? zoneName.get(c.zone_id) : null) ?? "구역 미상";
-  const st = c.action_status;
-  const stText = st ? (STATUS_LABEL[st] ?? st) : "요청서 없음";
+  const st = c.action_status && c.action_status !== "none" ? c.action_status : null;    // 서버는 요청서가 없으면 "none"
+  const stText = !st ? "" : st === "requested" ? "요청서 있음(처리 전)" : `요청서 ${STATUS_LABEL[st] ?? st}`;
   // 결과가 큰 조치(대피·중단·통제 등)는 일반 조치와 섞지 않고 별도 칸에 둔다. 서버가 조치마다 표시를 주면 그것을, 아니면 카드 표시 + 말로 가린다.
   const isRisky = (a: { text: string; needs_judgment?: number }) => !!a.needs_judgment || (!!c.needs_judgment && ESCALATION.test(a.text));
   const normal = c.actions.filter((a) => !isRisky(a));
@@ -541,7 +528,7 @@ function issueCard(c: Card, no: number, big: boolean, zoneName: Map<number, stri
     c.same_zone_others ? `<span class="flag soft">같은 구역 다른 문제 ${c.same_zone_others}</span>` : "",
   ].join("");
   const actLi = (a: IssueAction) => `
-          <li><span class="ic-act">${esc(a.text)}</span>${a.quote_id != null ? `<span class="ic-ref" title="이 조치의 근거가 된 민원">근거 #${a.quote_id}</span>` : ""}</li>`;
+          <li><span class="ic-act">${esc(a.text)}</span>${a.quote_id != null ? `<span class="ic-ref" title="이 조치의 근거가 된 민원">민원 #${a.quote_id}</span>` : ""}</li>`;
   // 인용은 원문 그대로 보여 주되(글자를 바꾸지 않는다) 줄바꿈 없이 한 줄로 잘라 보인다. 전체는 title 로.
   const cardId = c.id;
   const quoteLi = (q: Quote, del: boolean) => `<li${del ? ` data-fid="${q.id}"` : ""}><span class="qt"${del ? ` id="cq-${cardId}-${q.id}"` : ""} title="${esc(q.text)}">“${esc(q.text)}”</span><span class="muted small qm">${del ? "" : `#${q.id} · `}${hhmm(q.posted_at)}</span>${del ? delButton(q.id, `cq-${cardId}-${q.id}`) : ""}</li>`;
@@ -562,7 +549,7 @@ function issueCard(c: Card, no: number, big: boolean, zoneName: Map<number, stri
           <p class="ic-risk-t"><span aria-hidden="true">⚠</span> 운영자 판단 필요 — 실행 전 현장 확인</p>
           <ol class="ic-acts">${risky.map(actLi).join("")}</ol>
         </div>` : ""}
-        <p class="ic-who">담당 <b>${esc(c.department ?? "-")}</b>${c.contact ? ` · <a href="tel:${esc(c.contact.replace(/[^0-9+]/g, ""))}">${esc(c.contact)}</a>` : ""}</p>
+        <p class="ic-who">담당 <b>${esc(c.department ?? "-")}</b>${c.contact ? ` · ${contactHtml(c.contact)}` : ""}</p>
         <div class="ic-quotes">
           <section class="ic-q" aria-label="판단 근거">
             <h4 class="ic-h2">판단 근거</h4>
@@ -575,7 +562,7 @@ function issueCard(c: Card, no: number, big: boolean, zoneName: Map<number, stri
         </div>
         <div class="ic-actions">
           <button class="btn ${!st && (c.grade === "immediate" || c.grade === "high") ? "primary" : ""}" data-gen="${esc(c.label)}">${esc(name(c.label))} 전체 요청서 ${st && st !== "done" ? "다시 생성" : "생성"}</button>
-          <span class="st st-${esc(st ?? "none")}">${esc(stText)}</span>
+          ${st ? `<span class="st st-${esc(st)}">${esc(stText)}</span>` : ""}
           <a class="linkbtn" href="#action">조치 화면에서 상태 바꾸기</a>
         </div>
         ${c.text_source === "llm" ? `<p class="ic-src muted small">AI 정리${c.text_updated_at ? ` · ${hhmm(c.text_updated_at)}` : ""}</p>` : ""}
@@ -604,28 +591,13 @@ function issueCard(c: Card, no: number, big: boolean, zoneName: Map<number, stri
     </article>`;
 }
 
-/** (구버전 서버용) 심각도 1위 — 화면에서 가장 크게. */
-function hero(s: Severity, countRank: number, countTop: Severity | null, swap: boolean): string {
-  return `
-    <section class="card hero g-${esc(s.grade)}${swap ? " swap" : ""}" aria-label="심각도 1위">
-      <p class="hero-kicker">심각도 1위 · ${hhmm(s.as_of)} 기준</p>
-      <div class="hero-main">
-        <span class="hero-name">${typeChip(s.label)}</span>
-        ${badge(s.grade)}
-      </div>
-      <p class="hero-sub">${s.freq}건 · 건수로는 ${countRank}위</p>
-      ${countTop ? `<p class="flip">건수 1위 <b>${esc(name(countTop.label))} ${countTop.freq}건</b>보다
-        <b>${esc(name(s.label))} ${s.freq}건</b>이 먼저입니다</p>` : ""}
-    </section>`;
-}
-
 /** 유입 제목 옆 '확인 필요 N' (안전 의심이 있으면 'N · 안전 의심 M'). 0 이면 조용하게, 있으면 눈에 띄게 (D5-26 ④). */
 function reviewCounts(n: number, safety: number, canOpen = false): string {
   const on = n > 0 ? " on" : "";
   const sus = safety > 0
     ? `<span class="rv-sep" aria-hidden="true">·</span><span class="rv-safe" role="img" aria-label="안전 의심 ${safety}건">${typeIcon("safety")}<span>안전 의심 <b>${safety}</b></span></span>` : "";
   const inner = `<span>확인 필요 <b>${n}</b></span>${sus}`;
-  // 처리할 수 있는 서버면 버튼 (누르면 처리 패널이 열린다). 아니면 예전처럼 표시만.
+  // 처리할 것이 있으면 버튼 (누르면 처리 패널이 열린다). 없으면 표시만.
   return canOpen
     ? ` · <button type="button" class="rv${on}${rvOpen ? " open" : ""}" data-rv-toggle aria-expanded="${rvOpen}" aria-controls="rvp" title="눌러서 확인 필요 민원 처리">${inner}</button>`
     : ` · <span class="rv${on}">${inner}</span>`;

@@ -33,6 +33,7 @@ import * as db from "../core/db.ts";
 import { fromisoformat, isoformat } from "../core/datetime.ts";
 import { round } from "../core/pyfmt.ts";
 import { hms, refuse_live_db, sleep } from "./_common.ts";
+import * as democache from "./_democache.ts";
 
 const ROOT = BASE_DIR;
 export const DEFAULT_DB = path.join(ROOT, "output", "demo_festival.db");
@@ -156,6 +157,9 @@ async function main(): Promise<number> {
   mkdirSync(path.dirname(db_path), { recursive: true });
   await db.init_db();
   const zone_id = new Map((await db.zones()).map((z) => [z.name as string, z.id as number]));
+  const cached = await democache.load();                     // 미리 실제 모델로 분류해 둔 결과 (precache_demo.ts) — 있으면 분류가 모델 호출 없이 끝난다
+  console.log(cached ? `미리 분류한 실제 모델 결과 ${cached}건을 캐시에 넣었습니다 (${democache.read()!.backend} · ${democache.read()!.created_at}).`
+                     : "미리 분류한 결과 파일이 없습니다 — 분류는 워커가 그때 모델로 합니다 (precache_demo.ts 로 만들어 둘 수 있습니다).");
 
   let done = 0;
   for (const [zone, text, at] of rows) {

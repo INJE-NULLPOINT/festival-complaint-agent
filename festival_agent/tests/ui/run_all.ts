@@ -246,6 +246,7 @@ try {
   // 대량 데이터 속도(D5-37): 민원 1,000건·카드 30장 복사본 DB 를 자기 webapi·vite 로 띄워 잰다
   if (want("perf")) await runScript("perf", "대량 데이터 속도 (민원 1,000건·카드 30장)", "server_flow.ts", ["perf", "1000", "30"], { timeoutMs: 240000 });
   // 입력·오류·연결 점검(D5-40): 크롬 없이 HTTP 로만. 자기 webapi 를 따로 띄운다
+  if (want("alerts")) await runScript("alerts", "관제 알림 고르기 (등급 → 최신, 전체 개수)", "server_flow.ts", ["alerts"], { timeoutMs: 120000 });
   if (want("security")) await runScript("security", "webapi 입력·오류·연결 제한", "server_flow.ts", ["security"], { timeoutMs: 180000 });
   if (want("mobile")) await runScript("mobile", "5폭 가로 스크롤", "mobile_check.ts", [dev, SHOTS, "m_"], { timeoutMs: 900000 });
 

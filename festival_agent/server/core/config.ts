@@ -4,6 +4,8 @@
 // 읽는 쪽은 호출할 때마다 config.X 를 읽는다 (import 시점에 값을 복사하지 않는다).
 // process.env 에 이미 값이 정해져 있으면(빈 문자열이라도) .env 로 덮지 않는다 — dotenv 기본 동작. 테스트·측정 스크립트가
 // SUPABASE_DB_URL="" 로 운영 DB 를 끊는 데 기댄다 (server/README.md).
+import { createHash } from "node:crypto";
+import os from "node:os";
 import path from "node:path";
 import dotenv from "dotenv";
 
@@ -49,8 +51,8 @@ export const config = {
     positive: "긍정",
   } as Record<string, string>,
 
-  // 안전으로 간주하는 라벨 (심각도 ×2.0 가중 대상)
-  SAFETY_LABELS: new Set(["safety", "crowd"]),
+  // 라벨만으로 안전인 유형 (심각도 ×2.0 가중 대상). 혼잡(crowd)은 여기에 없다 — 민원의 is_safety 플래그가 true 일 때만 안전 (D5-59)
+  SAFETY_LABELS: new Set(["safety"]),
 
   // 심각도 계산에서 제외 (S-05)
   EXCLUDED_FROM_SEVERITY: new Set(["positive"]),
@@ -180,10 +182,16 @@ export const config = {
     "출동", "119", "112", "경찰", "소방", "구급", "재난문자"],
 
   // ① 분류의 실행 방식 (claude_code·anthropic 경로에만 해당, local 대역은 무관). 기본값은 'agent'.
-  //   agent    에이전트가 get_pending → (애매하면 lookup_similar) → save 를 스스로 부른다 (done_when 으로 보고 호출 생략)
-  //   prefetch 대기 민원을 코드가 프롬프트에 넣어 준다. 모델은 애매할 때만 lookup_similar 를 부르고 save 한다
-  CLASSIFY_MODE: env("CLASSIFY_MODE", "agent").trim().toLowerCase(),
+  //   agent    에이전트가 get_pending → (애매하면 lookup_similar) → save 를 스스로 부른다 (done_when 으로 보고 호출 생략) — 모델 호출 2회 이상
+  //   prefetch 대기 민원과 비슷한 과거 사례를 코드가 프롬프트에 넣어 준다. 모델은 save 만 한다 — 모델 호출 1회 (기본값, D5-69: 접수→분류 10초 목표)
+  CLASSIFY_MODE: env("CLASSIFY_MODE", "prefetch").trim().toLowerCase(),
   PREFETCH_LIMIT: 10,     // prefetch 모드에서 한 번에 프롬프트에 넣는 민원 수
+  // ③ 조치 에이전트의 실행 방식 (D5-77): prefetch(기본) = 부서·인용 후보·축제 정보를 코드가 미리 조회해 주고 모델은 요청서 1건당 1번만 부른다
+  // (인용 고르기 + 카드 조치가 없을 때만 제안 문장). agent = 모델이 도구 4개를 차례로 골라 부른다(5~6회).
+  DISPATCH_MODE: env("DISPATCH_MODE", "prefetch").trim().toLowerCase(),
+  // 분류 기억 (core/memory.ts, D5-66): 비슷한 과거 사례(운영자 지정 우선)를 조회해 프롬프트에 넣고, 거의 같은 글은 LLM 없이 반영한다.
+  // MEMORY=0 이면 끈다 (기억이 있을 때와 없을 때의 결과를 비교하는 측정·테스트용).
+  MEMORY_ENABLED: env("MEMORY", "1") !== "0",
 
   // ── 접수 도배 방지 (core/intake.ts) — 숫자는 설계값 ──
   DEDUP_ENABLED: env("DEDUP_ENABLED", "1") !== "0",                 // ① 같은 구역·같은 글 합치기
@@ -200,3 +208,20 @@ export const config = {
 };
 
 export type Config = typeof config;
+
+/**
+ * 조치요청서 DOCX 를 저장하고 내주는 폴더 (dispatcher 가 쓰고 webapi 가 내준다 — 같은 값). 호출할 때마다 계산한다 (D5-74).
+ *   1) 환경변수 DOCS_DIR 이 있으면 그 폴더.
+ *   2) 없으면: 운영처럼 도는 곳(Supabase 이거나 기본 festival.db)에서만 운영 output/.
+ *   3) 그 밖(임시 SQLite · node --test 안)은 운영 output/ 에 쓰지 않고 시스템 임시 폴더의 DB 경로별 폴더.
+ * 테스트·측정이 운영 output/ 에 '교통과 주차' 같은 시험 DOCX 를 쌓던 사고를 막는다.
+ */
+export function docs_dir(): string {
+  const env = process.env.DOCS_DIR;
+  if (env) return path.resolve(env);
+  const output = path.join(BASE_DIR, "output");
+  const production_like = Boolean(config.SUPABASE_DB_URL) || path.resolve(config.DB_PATH) === path.resolve(BASE_DIR, "festival.db");
+  if (production_like && !process.env.NODE_TEST_CONTEXT) return output;
+  const tag = createHash("sha1").update(path.resolve(config.DB_PATH)).digest("hex").slice(0, 8);
+  return path.join(os.tmpdir(), "festival_docs", tag);
+}

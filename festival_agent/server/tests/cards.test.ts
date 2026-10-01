@@ -384,9 +384,14 @@ test("test_카드_4일창_역전_건수1위_주차는_즉시카드_아래", asyn
     }
     const cs = await cards(5760);
     assert.equal(cs[0].label, "safety");
-    assert.deepEqual(cs.slice(0, 5).map((c: any) => c.grade), Array(5).fill("immediate"));
+    // D5-86: S-04 는 창 전체의 안전 민원 수로 센다 — 안전 유형 3건에 혼잡 유형의 안전 1건이 더해져, 안전 민원이 든 혼잡 카드도 즉시.
+    assert.deepEqual(cs.slice(0, 5).map((c: any) => c.grade), ["immediate", "immediate", "immediate", "immediate", "mid"]);
+    // (넷째 카드는 안전 민원이 든 혼잡 구역 카드, 다섯째는 안전 민원이 없는 구역 카드 — 비안전으로 다시 매겨 '보통', 창 전체 안전 수의 영향 없음)
     const parking = cs.filter((c: any) => c.label === "parking");
-    assert.ok(parking.length && parking.every((c: any) => c.grp === "more"));
+    // 즉시 카드가 3장뿐(D5-59)이라 본 목록(5장)에 주차 카드가 들어올 수 있다 — 건수 1위 주차가 모든 즉시 카드보다 아래에 있다는 점이 핵심
+    const imm = cs.filter((c: any) => c.grade === "immediate");
+    assert.ok(parking.length && parking.every((c: any) => c.grade !== "immediate"));
+    assert.ok(Math.max(...imm.map((c: any) => c.rank_no)) < Math.min(...parking.map((c: any) => c.rank_no)));
     assert.equal(Math.max(...cs.map((c: any) => c.type_freq)), parking[0].type_freq);
   }));
 });

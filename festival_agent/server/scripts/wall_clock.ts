@@ -15,19 +15,20 @@
 // 판정 기준은 '중앙값'과 '최댓값'이다 (신청서 목표: 접수 후 10초 이내). 폴링 위상을 흩으려고 접수 전에 0~3초 무작위로 쉰다.
 import "./_safe_env.ts";
 import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { BASE_DIR, config } from "../core/config.ts";
 import * as db from "../core/db.ts";
 import { fixed } from "../core/pyfmt.ts";
 import * as webapi from "../webapi.ts";
-import { median, mkdtemp, refuse_live_db, same_path, sleep, write_text, ymd_hm } from "./_common.ts";
+import { median, mkdtemp, percentile, refuse_live_db, same_path, sleep, write_text, ymd_hm } from "./_common.ts";
 
 const ROOT = BASE_DIR;
 const SERVER = path.join(ROOT, "server");
 
-// 문장은 측정용으로 지어낸 것이다(서로 달라야 캐시·같은 글 합치기에 걸리지 않는다). 구역은 돌아가며 쓴다.
+// 문장은 측정용으로 **지어낸 가상 민원**이다 — 실제 방문객이 쓴 글이 아니다 (24개; 서로 달라야 캐시·같은 글 합치기에 걸리지 않는다). 구역은 돌아가며 쓴다.
+// 24개를 넘으면 text_for() 가 '(N번째 시험)' 번호를 붙여 이어 쓴다.
 export const TEXTS = [
   "유등터널 입구에서 사람들이 한꺼번에 몰려 앞으로 나가기 힘들었어요",
   "임시 화장실 앞 줄이 너무 길어서 삼십 분이나 기다렸습니다",
@@ -45,7 +46,18 @@ export const TEXTS = [
   "소망등 값이 생각보다 비싸서 망설였어요",
   "출구를 알려 주는 표시가 없어서 한참 돌았어요",
   "터널 안이 너무 붐벼서 아이 손을 놓칠 뻔했어요",
+  "먹거리장터 줄이 너무 길어서 음식을 받는 데 사십 분이 걸렸어요",
+  "남강 수상무대 앞 통로가 막혀서 사람들이 서로 밀리고 있어요",
+  "촉석루 계단 조명이 꺼져 있어서 내려가다 넘어질 뻔했습니다",
+  "셔틀버스 승강장 표지가 없어서 어느 줄에 서야 할지 몰랐어요",
+  "임시 화장실 세면대에 물이 안 나와서 손을 못 씻었어요",
+  "진주교 남단 주차장 출구가 한 곳뿐이라 나가는 데 오래 걸렸어요",
+  "소망등 달기 구역에서 안내 요원을 찾을 수 없어 한참 헤맸어요",
+  "등이 정말 예뻐서 가족과 사진을 많이 찍었습니다 감사합니다",
 ];
+
+/** k 번째 측정 문장. TEXTS 개수를 넘으면 같은 글이 아니도록 번호를 붙여 이어 쓴다 (같은 구역·같은 글 합치기에 걸리지 않게). */
+export const text_for = (k: number): string => TEXTS[k % TEXTS.length] + (k >= TEXTS.length ? ` (${Math.floor(k / TEXTS.length) + 1}번째 시험)` : "");
 
 interface Args { mode: string; backend: string; n: number; batch: number; concurrent: number; timeout: number; report: boolean }
 
@@ -131,7 +143,7 @@ async function main(): Promise<number> {
   refuse_live_db("wall_clock");
   const { values: v } = parseArgs({
     options: {
-      mode: { type: "string", default: "agent" },
+      mode: { type: "string", default: "prefetch" },       // 기본 분류 방식과 같게 (config.CLASSIFY_MODE, D5-69)
       backend: { type: "string", default: "claude_code" },
       n: { type: "string", default: "3" },
       batch: { type: "string", default: "5" },
@@ -152,8 +164,8 @@ async function main(): Promise<number> {
   }
 
   const need = args.n + Math.max(args.batch, 0);
-  if (!args.concurrent && need > TEXTS.length) {
-    console.log(`측정용 문장이 ${TEXTS.length}개뿐이라 --n 과 --batch 합이 그 이하여야 합니다 (지금 ${need}).`);
+  if (!args.concurrent && need > 200) {
+    console.log(`--n 과 --batch 합은 200 이하여야 합니다 (지금 ${need}).`);
     return 2;
   }
   const tmp = path.join(mkdtemp("wall_"), "t.db");
@@ -162,7 +174,7 @@ async function main(): Promise<number> {
   config.SUPABASE_DB_URL = "";
   const env = {
     ...process.env, DB_PATH: tmp, LLM_BACKEND: args.backend, CLASSIFY_MODE: args.mode, SUPABASE_DB_URL: "",
-    SUPABASE_URL: "", SUPABASE_SERVICE_KEY: "", PYTHONIOENCODING: "utf-8",
+    SUPABASE_URL: "", SUPABASE_SERVICE_KEY: "", PYTHONIOENCODING: "utf-8", DOCS_DIR: path.join(path.dirname(tmp), "docs"),
   };
   if (!same_path(config.DB_PATH, tmp) || same_path(config.DB_PATH, path.join(ROOT, "festival.db"))) throw new Error("임시 DB 설정 실패");
 
@@ -170,7 +182,20 @@ async function main(): Promise<number> {
   const log_fd = openSync(path.join(path.dirname(tmp), "worker.log"), "w");
   const worker = spawn(process.execPath, [path.join(SERVER, "worker.ts"), "--no-agents"], { cwd: ROOT, stdio: ["ignore", log_fd, log_fd], env });
   console.log(`측정 시작: 모드 ${args.mode} · 백엔드 ${args.backend} · 임시 DB ${tmp} (워커 pid ${worker.pid})`);
-  await sleep(4000);
+  // 워커가 준비된 뒤부터 잰다 (D5-76): 실제 모델 백엔드는 워커가 시작 직후 준비 호출 1회를 한다 — 그게 끝날 때까지 기다리고 측정에 넣지 않는다.
+  if (args.backend === "local") await sleep(4000);
+  else {
+    const log_path = path.join(path.dirname(tmp), "worker.log");
+    const t_ready = Date.now();
+    let ready = false;
+    while (Date.now() - t_ready < 120_000) {
+      const txt = existsSync(log_path) ? readFileSync(log_path, "utf-8") : "";
+      if (/준비 호출 (완료|실패)/.test(txt)) { ready = true; break; }
+      await sleep(300);
+    }
+    console.log(ready ? `워커 준비 호출 끝 (${fixed((Date.now() - t_ready) / 1000, 1)}초 기다림) — 이제부터 잰다` : "⚠ 준비 호출 표시를 못 봄 (120초) — 그대로 잰다");
+    await sleep(1000);
+  }
 
   const conn = await db.connect();
   const wait_done = async (receipts: number[]): Promise<Map<number, number>> => {
@@ -199,7 +224,7 @@ async function main(): Promise<number> {
       await sleep(Math.random() * 3 * 1000);                     // 워커 폴링 주기의 위상을 흩는다
       const t = Date.now() / 1000;
       const receipts: number[] = [];
-      for (let i = 0; i < n; i++) receipts.push((await webapi.submit_feedback(1 + (k + i) % 6, TEXTS[k + i], null))!);
+      for (let i = 0; i < n; i++) receipts.push((await webapi.submit_feedback(1 + (k + i) % 6, text_for(k + i), null))!);
       k += n;
       const done = await wait_done(receipts);
       const lat = receipts.filter((r) => done.has(r)).map((r) => done.get(r)! - t);
@@ -223,20 +248,32 @@ async function main(): Promise<number> {
   const every = results.flatMap(([, lat]) => lat);
   const lines = [
     `# 접수→분류 벽시계 측정 (${ymd_hm(new Date())})`, "",
-    `- 모드 \`${args.mode}\` · 백엔드 \`${args.backend}\` · 임시 DB (운영 DB 미사용) · 워커 폴링 3초 포함`, "",
+    `- 모드 \`${args.mode}\` · 백엔드 \`${args.backend}\` · 임시 DB (운영 DB 미사용) · 워커 폴링 포함`, "",
     "| 묶음 | 건수 | 최소 | 중앙값 | 최대 | 미완료 |", "|---|---|---|---|---|---|",
     ...results.map(([label, lat, miss]) => lat.length
       ? `| ${label} | ${lat.length} | ${fixed(Math.min(...lat), 1)}s | ${fixed(median(lat), 1)}s | ${fixed(Math.max(...lat), 1)}s | ${miss} |`
       : `| ${label} | 0 | - | - | - | ${miss} |`), "",
   ];
   if (singles.length) {
-    lines.push(`**1건 접수: 중앙값 ${fixed(median(singles), 1)}s · 최대 ${fixed(Math.max(...singles), 1)}s** ` +
-      `(신청서 목표 10초 이내 → ${Math.max(...singles) <= 10 ? "달성" : median(singles) > 10 ? "미달" : "중앙값은 달성, 최대는 초과"})`);
+    const p90 = percentile(singles, 90);
+    lines.push(`**1건 접수: 중앙값 ${fixed(median(singles), 1)}s · p90 ${fixed(p90, 1)}s · 최대 ${fixed(Math.max(...singles), 1)}s** ` +
+      `(${singles.length}회 · 신청서 목표 10초 이내 → ${Math.max(...singles) <= 10 ? "달성" : median(singles) > 10 ? "미달" : p90 <= 10 ? "중앙값·p90 은 달성, 최대는 초과" : "중앙값은 달성, p90·최대는 초과"})`);
+    lines.push(`- p90 = 정렬한 ${singles.length}개 중 ceil(0.9×${singles.length}) 번째 값(최근접 순위, 보간 없음)` + (singles.length < 20 ? ` · 표본이 ${singles.length}회뿐이라 참고용(20회 이상이면 의미 있음)` : ""));
   }
   const avg = calls.ms !== null && calls.ms !== undefined ? `${fixed(Number(calls.ms), 0)}ms` : "-";
   lines.push(`- 분류 모델 호출 ${calls.n}회 · 호출 평균 ${avg} · lookup_similar ${lookups}회 · ` +
     `입력 ${tokens.i} · 출력 ${tokens.o} 토큰`,
-    "- 백엔드 `claude_code` 는 CLI 경유 참고값이다. 제출 기준은 `--backend anthropic` 측정이다.");
+    args.backend === "claude_code" ? "- 백엔드 `claude_code` 는 CLI 경유 참고값이다. 제출 기준은 `--backend anthropic` 측정이다."
+      : args.backend === "local" ? "- 백엔드 `local` 은 규칙 대역(모델 호출 없음)이라 구조 확인용이다. 제출 기준은 `--backend anthropic` 측정이다."
+      : "- 제출 기준 측정(`--backend anthropic`).");
+  const warm = (await conn.execute("SELECT latency_ms, input_tokens, output_tokens FROM agent_log WHERE action='warmup' ORDER BY id LIMIT 1")).fetchone();
+  if (warm) lines.push(`- 준비 호출(워커 시작 직후 1회, 측정에 넣지 않음): ${fixed(Number(warm.latency_ms) / 1000, 1)}초 · 토큰 ${warm.input_tokens}→${warm.output_tokens}`);
+  if (lookups === 0) {
+    lines.push("- 기억 조회 0회: 측정용 빈 임시 DB라 비슷한 과거 사례가 없음. 기억 동작의 근거는 server/tests/memory.test.ts");
+  } else {
+    lines.push(`- 기억 조회 ${lookups}회: 측정 문장은 ${TEXTS.length}개라 ${TEXTS.length + 1}회째부터 같은 문장에 번호만 붙여 다시 써서 앞 측정 문장을 비슷한 사례로 찾음. ` +
+      "번호가 붙은 글은 기억 정규화에서 덧붙은 내용으로 처리돼 LLM 호출을 건너뛰지 않으므로 LLM 판단·지연은 그대로. 기억 동작의 근거는 server/tests/memory.test.ts");
+  }
   const out = lines.join("\n");
   console.log("\n" + out);
   if (args.report) {

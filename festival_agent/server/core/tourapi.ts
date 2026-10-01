@@ -116,7 +116,6 @@ CREATE TABLE IF NOT EXISTS festival_info (
 export async function ensure_cache(): Promise<void> {
   const conn = await db.connect();
   await conn.executescript(CACHE_SCHEMA);
-  await conn.commit();
 }
 
 export async function save_festival(info: Row): Promise<void> {
@@ -128,7 +127,6 @@ export async function save_festival(info: Row): Promise<void> {
      VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
     [info.content_id, info.title, info.addr, info.start_date, info.end_date, info.tel,
       info.homepage, info.overview, info.mapx, info.mapy, db.now()]);
-  await conn.commit();
 }
 
 export async function cached_festival(keyword: string | null = null): Promise<Row | null> {

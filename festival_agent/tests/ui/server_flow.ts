@@ -13,7 +13,7 @@
 import { freePort, killTree, openChrome, quitChrome, reporter } from "./lib.ts";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -205,7 +205,7 @@ async function perf() {
   const m0 = await metrics();
   const t0 = performance.now();
   await send("Page.navigate", { url: `${base}/#control` });
-  const drawn = await until(() => ev(`document.querySelectorAll("#app .icard, #app details[data-grp], #app .hero-main").length > 0 && document.getElementById("app").innerText.length > 500`), 20000, 50);
+  const drawn = await until(() => ev(`document.querySelectorAll("#app .icard, #app details[data-grp]").length > 0 && document.getElementById("app").innerText.length > 500`), 20000, 50);
   const firstDraw = performance.now() - t0;
   const nodes = await ev(`document.getElementById("app").getElementsByTagName("*").length`);
   ok(`측정 관제 첫 그리기: ${Math.round(firstDraw)}ms · 화면 요소 ${nodes}개`);
@@ -230,6 +230,34 @@ async function perf() {
   check("다시 그리기 때 브라우저 작업 시간", work <= BUDGET.redrawWork * SLOW, `${Math.round(work)}ms (예산 ${BUDGET.redrawWork * SLOW})`);
   void m0;
 
+}
+
+// ══ alerts ═══════════════════════════════════════════════════════
+// 관제 머리의 알림은 같은 시각에 여러 개가 나도 높은 등급(안전·혼잡 즉시)이 가려지지 않아야 하고(D5-61), 전체 개수(alerts_total)가 따로 온다.
+async function alerts() {
+  const DB = makeDb("alerts.db");
+  if (!DB) return die("준비: DB 복사본");
+  // 같은 시각에 알림 5개: 안전·혼잡(즉시)이 먼저 나고, 주차·화장실·가격(보통)이 나중에 나서 id 가 더 크다 — '최신 3건'만 보면 안전·혼잡이 사라진다.
+  const h = new DatabaseSync(DB);
+  h.exec("UPDATE alert SET acked=1");
+  const sevCols = h.prepare("PRAGMA table_info(severity)").all().map((c) => String(c.name)).filter((n) => n !== "id");
+  const base: Record<string, unknown> = h.prepare("SELECT * FROM severity ORDER BY id DESC LIMIT 1").get() ?? { festival_id: 1, window: "60min", freq: 3, avg_sentiment: 0, base_score: 50, safety_w: 1, spike_w: 1, pending_w: 1, formula: "" };
+  const asOf = "2099-01-01T00:00:00";
+  const grades: [string, string][] = [["safety", "immediate"], ["crowd", "immediate"], ["parking", "mid"], ["restroom", "mid"], ["price", "mid"]];
+  for (const [label, grade] of grades) {
+    const row: Record<string, unknown> = { ...base, label, grade, as_of: asOf, score: grade === "immediate" ? 90 : 40 };
+    h.prepare(`INSERT INTO severity (${sevCols.map((c) => `"${c}"`).join(",")}) VALUES (${sevCols.map(() => "?").join(",")})`).run(...sevCols.map((c) => (row[c] ?? null) as SQLInputValue));
+  }
+  const at = "2099-01-01T00:00:01";
+  for (const [label] of grades) h.prepare("INSERT INTO alert (festival_id, label, kind, detail, created_at, acked) VALUES (1, ?, 'spike', ?, ?, 0)").run(label, `시험용 알림 ${label}`, at);
+  h.close();
+  const a = await startApi(DB, { ADMIN_CODE: newCode("alr-") });
+  if (!a) return die("준비: webapi 가 안 뜸");
+  const c = (await (await fetch(`${a.base}/api/control`)).json()).data;
+  const labels = (c.alerts as { label: string }[]).map((x) => x.label);
+  check("알림 5개(즉시 2 · 보통 3)가 같은 시각에 나면 안전·혼잡 즉시 알림이 먼저 보인다", labels.length === 3 && labels[0] !== labels[1] && ["safety", "crowd"].every((l) => labels.includes(l)), `보이는 것: ${labels.join(", ")}`);
+  check("같은 등급 안에서는 최신 알림이 먼저 (보통 중 가장 최근 것이 세 번째 자리)", labels[2] === "price", labels.join(", "));
+  check("alerts_total 은 확인 안 한 알림 전체 개수 (5)", c.alerts_total === 5, `alerts_total ${c.alerts_total} · 보이는 ${c.alerts.length}`);
 }
 
 // ══ security ═════════════════════════════════════════════════════
@@ -323,8 +351,8 @@ async function security() {
 
 }
 
-const MODES = { reconnect, perf, security };
-if (!MODES[MODE]) { console.error("사용: node tests/ui/server_flow.ts reconnect|perf|security"); process.exit(2); }
+const MODES = { reconnect, perf, security, alerts };
+if (!MODES[MODE]) { console.error("사용: node tests/ui/server_flow.ts reconnect|perf|security|alerts"); process.exit(2); }
 await MODES[MODE]();
 R.summary();
 await cleanup();

@@ -5,7 +5,7 @@
 //   · 함수·필드 이름은 Python 그대로 (snake_case). Python 키워드 인자는 마지막 인자 하나의 객체.
 //   · dict 반환 = 같은 키의 plain object, 튜플 반환 = 배열.
 //   · config 는 바꿀 수 있는 객체 `config` (테스트가 잠깐 바꿨다 되돌린다).
-//   · db.connect() → conn.execute(sql, params) → cur.fetchone()/fetchall()/lastrowid, conn.commit().
+//   · db.connect() → conn.execute(sql, params) → cur.fetchone()/fetchall()/lastrowid.
 //     (동기든 비동기든 괜찮게 전부 await 한다. pg 를 쓰면 비동기일 것이다.)
 //
 // 안전: 모든 테스트는 임시 SQLite 로만 돈다. 운영 Supabase 에 닿지 않도록 모듈을 불러오기 **전에**
@@ -80,7 +80,6 @@ export async function one(db: any, sql: string, params: any[] = []): Promise<any
 export async function run(db: any, sql: string, params: any[] = []): Promise<number> {
   const conn = await db.connect();
   const cur = await conn.execute(sql, params);
-  await conn.commit();
   return cur?.lastrowid;
 }
 

@@ -4,6 +4,7 @@
 // 외부 API를 실제로 사용하는 지점이므로 심사 'Tool 4점'의 근거가 된다.
 import { config } from "../core/config.ts";
 import { tool } from "../core/llm.ts";
+import * as settings from "../core/settings.ts";
 import * as tourapi from "../core/tourapi.ts";
 
 export const lookup_festival_info = tool({
@@ -34,4 +35,4 @@ export const get_zones = tool({
   description: "축제장 구역 목록을 조회한다.",
   properties: {},
   params: [],
-}, () => [...config.ZONES]);
+}, async () => settings.zone_names());      // DB(운영자 설정) 기준, 숨긴 구역 제외 (D5-90)

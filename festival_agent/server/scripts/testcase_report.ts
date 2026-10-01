@@ -1,7 +1,8 @@
-// 대표 Test Case 5종 → tests/testcase_report.md — Python tests/test_scenarios.py 의 리포트 부분을 옮긴 것 (설명회 체크리스트 10번).
+// 대표 Test Case 5종 → tests/testcase_report.md(--live) / tests/testcase_structure.md(구조 검증) — Python tests/test_scenarios.py 의 리포트 부분을 옮긴 것 (설명회 체크리스트 10번).
 //
 // 단위테스트와 다르다. 상황별 동작 검증이고, 심사 '기술 구현·완성도 20점' 중 '안정성·Test Case 6점'에 직결된다.
-// 결과 파일 festival_agent/tests/testcase_report.md 가 '테스트 증거'다.
+// 결과 파일 festival_agent/tests/testcase_report.md 가 '테스트 증거'다 — 실제 모델(--live)로 돌린 기록이라 **구조 검증은 덮어쓰지 않는다**
+// (D5-78: 구조 모드가 claude_code --live 리포트를 덮어쓴 사고). 구조 검증 결과는 tests/testcase_structure.md 에 쓴다.
 //
 // 실행 (festival_agent/server 에서)
 //   node scripts/testcase_report.ts                                 구조 검증 (LLM 호출 없음, 임시 SQLite)
@@ -38,7 +39,9 @@ const severity = await import("../core/severity.ts");
 const issues = await import("../core/issues.ts");
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const REPORT = path.resolve(HERE, "..", "..", "tests", "testcase_report.md");
+export const REPORT_LIVE = path.resolve(HERE, "..", "..", "tests", "testcase_report.md");          // 제출용 '테스트 증거' (--live 만 쓴다)
+export const REPORT_STRUCTURE = path.resolve(HERE, "..", "..", "tests", "testcase_structure.md");   // 구조 검증(LLM 미호출) 결과
+export const REPORT = LIVE ? REPORT_LIVE : REPORT_STRUCTURE;
 
 type Rec = { no: number; name: string; situation: string; given: string; expected: string; actual: string; verdict: string; note: string };
 const RESULTS: Rec[] = [];
@@ -50,7 +53,7 @@ function record(no: number, name: string, situation: string, given: string, expe
 }
 
 const q1 = async (sql: string, p: unknown[] = []) => (await (await db.connect()).execute(sql, p)).fetchone();
-const exec = async (sql: string, p: unknown[] = []) => { const c = await db.connect(); const cur = await c.execute(sql, p); await c.commit(); return cur; };
+const exec = async (sql: string, p: unknown[] = []) => { const c = await db.connect(); const cur = await c.execute(sql, p); return cur; };
 const zoneId = async () => (await db.zones())[0].id as number;
 const runClassifier = async () => (await import("../agents/classifier.ts")).run_once(5);
 
@@ -197,7 +200,7 @@ function writeReport(live: boolean): string {
   const lines = [
     "# 대표 Test Case 5종 수행 결과", "",
     `- 수행일시: ${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`,
-    `- 수행모드: ${live ? "실제 LLM 호출(--live)" : "구조 검증(LLM 미호출)"}`,
+    `- 수행모드: ${live ? "실제 LLM 호출(--live)" : "구조 검증(LLM 미호출) — 제출용 기록은 testcase_report.md (--live)"}`,
     `- 백엔드: ${llm.backend()}`,                               // D6-1 판정은 anthropic 만 인정한다. claude_code 는 CLI 경유 참고값이다.
     `- 데이터: ${LIVE_DB ? "운영 DB(--live-db)" : "임시 SQLite (운영 DB 미사용)"} · 서버: TypeScript`,
     `- 결과: **${passed}/${RESULTS.length} 통과**`, "",

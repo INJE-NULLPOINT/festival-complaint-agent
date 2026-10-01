@@ -18,6 +18,8 @@ function normalizeBase(raw: string): string {
   let v = raw.trim();
   if (!v) return location.origin;
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) v = "http://" + v;
+  // 붙여 넣은 주소에 #해시·?쿼리가 있으면 '?v=qr' 가 해시 안으로 들어가 관리자 화면이 열린다 — 떼고 경로까지만 쓴다
+  try { const u = new URL(v); v = u.origin + u.pathname; } catch { v = v.split(/[?#]/)[0]; }
   return v.replace(/\/+$/, "");
 }
 const isLocalOnly = (base: string) => /^https?:\/\/(localhost|127\.|\[?::1\]?)(:|\/|$)/i.test(base);

@@ -61,7 +61,6 @@ export async function find_duplicate(zone_id: number | null, text: string, now: 
     [...zarg, cutoff])).fetchall()) {
     if (normalize(r.text) === norm) {
       await conn.execute("UPDATE feedback_inbox SET dup_count = COALESCE(dup_count, 0) + 1 WHERE id=?", [r.id]);
-      await conn.commit();
       return r.id;
     }
   }
@@ -72,7 +71,6 @@ export async function find_duplicate(zone_id: number | null, text: string, now: 
     if (normalize(r.raw_text) === norm) {
       await conn.execute("UPDATE feedback SET dup_count = COALESCE(dup_count, 0) + 1 WHERE id=?", [r.id]);
       const receipt = (await conn.execute("SELECT MAX(id) m FROM feedback_inbox WHERE feedback_id=?", [r.id])).fetchone()!.m;
-      await conn.commit();
       return receipt || r.id;
     }
   }
@@ -89,12 +87,10 @@ export async function check_rate(src: string | null, now: Date | null = null): P
     const n = (await conn.execute("SELECT COUNT(*) c FROM submit_rate WHERE src=? AND at >= ?",
       [src, _stamp(plus(t, -seconds(sec)))])).fetchone()!.c;
     if (n >= limit) {
-      await conn.commit();
       throw new RateLimited(MSG_RATE);
     }
   }
   await conn.execute("INSERT INTO submit_rate (src, at) VALUES (?, ?)", [src, _stamp(t)]);
-  await conn.commit();
 }
 
 /**
@@ -121,7 +117,6 @@ export async function purge_old(now: Date | null = null): Promise<number> {
   const conn = await db.connect();
   let n = (await conn.execute("DELETE FROM submit_rate WHERE at < ?", [cutoff])).rowcount;
   n += (await conn.execute("DELETE FROM admin_attempt WHERE at < ?", [cutoff])).rowcount;
-  await conn.commit();
   return n;
 }
 
