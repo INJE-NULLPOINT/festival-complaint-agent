@@ -1,0 +1,26 @@
+/* QR 만들기 — 기존 .card 를 그대로 쓰고 배치만 정한다. 인쇄: 사이드바·헤더·입력 줄은 숨기고 QR 한 장을 A4 한 장에 크게. */
+.qr-top { display: flex; flex-direction: column; gap: 10px; }
+.qr-base { display: flex; flex-direction: column; gap: 6px; }
+.qr-l { font-size: 15px; font-weight: 700; }
+.qr-base input { font: inherit; font-size: 17px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); min-height: 44px; width: 100%; box-sizing: border-box; }
+.qr-hint, .qr-warn { margin: 0; }
+.qr-warn { font-weight: 700; }
+.qr-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.qr-card { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; max-width: 460px; margin: 0 auto; width: 100%; box-sizing: border-box; }
+.qr-name { margin: 0; font-size: 22px; font-weight: 800; }
+.qr-img { width: 320px; max-width: 100%; height: auto; image-rendering: pixelated; background: #fff; }
+.qr-url { margin: 0; font-size: 15px; color: var(--muted); overflow-wrap: anywhere; }
+.qr-cap { margin: 0; font-size: 15px; }
+.qr-save { min-height: 44px; }
+
+@media print {
+  @page { size: A4; margin: 15mm; }
+  .side, .side-scrim, header.top, .page-head, #conn-banner, #toasts, .qr-top, .qr-save, .menu-btn { display: none !important; }
+  body, body:not(.visitor) { padding-left: 0 !important; background: #fff !important; }
+  main { padding: 0 !important; max-width: none !important; }
+  .qr-card { max-width: none; border: 0; box-shadow: none; padding: 0; break-inside: avoid; gap: 8mm; color: #000; }
+  .qr-name { font-size: 34pt; }
+  .qr-img { width: 150mm; }
+  .qr-url { color: #000; font-size: 16pt; }
+  .qr-cap { font-size: 18pt; }
+}

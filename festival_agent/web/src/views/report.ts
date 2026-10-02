@@ -1,5 +1,5 @@
 // 접수 — 방문객이 QR 로 들어오는 화면. 이름·연락처는 받지 않는다.
-// 문구는 디자인_화면내용정리.md '📱 사용자용 앱' ①접수 ②완료 ③FAQ 를 따른다 (할일 D5-20).
+// 방문객 접수 ①접수 ②완료 ③FAQ 화면
 //   ?zone=유등터널  또는  ?zone=4   → 그 구역이 미리 선택된 채로 열린다 (QR 마다 다르게)
 // 모양은 흑백 결제 화면 느낌 (제출_준비/stitch/reference_bw_checkout.png). 스타일은 style.css 의 .rp · body.visitor 에만.
 // 접수하면 화면을 바꾸지 않고 <dialog> 모달로 완료를 띄운다 (D5-24). 응급 안내는 모달 맨 아래 한 줄만.
@@ -22,16 +22,9 @@ const EXAMPLES: [string, string, string][] = [
 const FAQ: [string, string][] = [
   ["이름이나 연락처를 적어야 하나요?", "아니요. 묻지 않습니다."],
   ["제 개인정보가 남나요?", "이름·연락처는 묻지 않습니다. 정해진 형식의 전화번호·이메일은 자동으로 가려집니다. 이름·주소는 적지 말아 주세요."],
-  ["답변을 받을 수 있나요?", "연락처를 받지 않아 개별 답변은 드리지 못합니다. 관제에 바로 올라가 담당자가 확인합니다."],
+  ["답변을 받을 수 있나요?", "연락처를 받지 않아 개별 답변은 드리지 못합니다. 담당자가 확인합니다."],
   ["같은 내용을 여러 번 신고해도 되나요?", "괜찮습니다. 같은 불편을 겪은 분이 많을수록 더 먼저 살펴봅니다. 다만 같은 구역에서 똑같은 글이 2분 안에 다시 들어오면 한 건으로 합쳐집니다."],
   ["접속 기록이 남나요?", "장난 신고를 막기 위해 접속 주소를 알아볼 수 없는 값으로 바꿔 쓰고, 24시간이 지나면 지웁니다. 원래 주소는 저장하지 않고, 신고 내용과도 연결하지 않습니다."],
-];
-
-// 신고 뒤에 일어나는 일 — 이용자 설명서 '신고하신 내용은 어떻게 되나요'
-const NEXT: [string, string][] = [
-  ["분류", "잠시 후 어떤 불편인지 나뉩니다"],
-  ["판단", "얼마나 급한 일인지 판단합니다. 안전은 가장 먼저"],
-  ["전달", "관제에 바로 올라가 담당자가 확인합니다"],
 ];
 
 const ico = (d: string) => `<svg class="rp-ico" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
@@ -72,7 +65,8 @@ export async function renderReport(root: HTMLElement): Promise<void> {
   root.innerHTML = `
     <section class="card narrow rp">
       <h1>불편 신고</h1>
-      <p class="rp-lead">관제에 바로 올라가 담당자가 확인합니다. 이름이나 연락처는 적지 않아도 됩니다.</p>
+      <p class="rp-lead">이름이나 연락처는 적지 않아도 됩니다.</p>
+      <p class="rp-lead">생명이 위급하면 119·112에 먼저 연락해 주세요.</p>
 
       <form id="rf" class="form rp-form" novalidate>
         <!-- 구역: 행 모양. 투명한 select 가 행 전체를 덮어 누르면 폰 기본 선택창이 열린다 -->
@@ -80,7 +74,7 @@ export async function renderReport(root: HTMLElement): Promise<void> {
           ${PIN}
           <span class="rp-row-text">
             <b id="rzone">${esc(preset ? zoneName(preset) : "구역 선택")}</b>
-            <span>위치 · 누르면 바꿀 수 있어요</span>
+            <span>위치</span>
           </span>
           ${CHEV}
           <select name="zone" required aria-label="위치">
@@ -148,6 +142,9 @@ export async function renderReport(root: HTMLElement): Promise<void> {
     root.querySelector("#rzone")!.textContent = n || "구역 선택";
     select.closest(".rp-zone")!.classList.toggle("on", !!n);
   });
+  // 구역은 아래에서 올라오는 시트로 고른다. 만들지 못하면 기본 select 를 그대로 쓴다 (D5-45)
+  let zoneFocus: HTMLElement = select;
+  try { zoneFocus = enhanceZone(root.querySelector<HTMLElement>(".rp")!, zoneRow as HTMLElement, select, zs); } catch { /* 기본 select */ }
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -161,10 +158,10 @@ export async function renderReport(root: HTMLElement): Promise<void> {
     if (problem) {
       err.textContent = problem;
       err.hidden = false;
-      (!zoneId ? select : text).focus();
+      (!zoneId ? zoneFocus : text).focus();
       return;
     }
-    const btn = form.querySelector<HTMLButtonElement>("button")!;
+    const btn = form.querySelector<HTMLButtonElement>("button[type=submit]")!;
     btn.disabled = true;
     btn.textContent = "보내는 중…";
     err.hidden = true;
@@ -194,6 +191,119 @@ export async function renderReport(root: HTMLElement): Promise<void> {
   });
 }
 
+/** 구역 고르기 시트 (D5-45). 기본 select 는 그대로 두고(폼 값 · 검증 · 구형 브라우저 대비) 화면에서만 가리고,
+ *  그 위에 투명 버튼을 얹어 누르면 아래에서 시트가 올라오게 한다. 만드는 중 오류가 나면 되돌려 기본 select 로 쓴다.
+ *  버튼 aria-haspopup=listbox · aria-expanded, 목록 role=listbox/option. 방향키 · Home/End · Enter/Space · Esc · Tab 순환, 닫으면 버튼으로 포커스 복귀. */
+function enhanceZone(host: HTMLElement, row: HTMLElement, select: HTMLSelectElement, zs: Zone[]): HTMLElement {
+  // <button> 이 아니라 role=button 인 div — 폼 안의 첫 <button> 은 늘 '접수하기' 여야 해서 (다른 코드 · 검사가 그렇게 찾는다)
+  const btn = document.createElement("div");
+  btn.className = "rp-zone-btn";
+  btn.setAttribute("role", "button");
+  btn.tabIndex = 0;
+  btn.setAttribute("aria-haspopup", "listbox");
+  btn.setAttribute("aria-expanded", "false");
+  const sync = () => {
+    const z = zs.filter((x) => String(x.id) === select.value)[0];
+    btn.setAttribute("aria-label", `위치: ${z ? z.name : "구역 선택"}`);
+  };
+  sync();
+  select.addEventListener("change", sync);
+  try {
+    select.tabIndex = -1;
+    select.setAttribute("aria-hidden", "true");
+    row.appendChild(btn);
+    row.classList.add("enh");
+    btn.addEventListener("click", () => openZoneSheet(host, btn, select, zs));
+    btn.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " " || e.key === "Spacebar" || e.key === "ArrowDown" || e.key === "Down") { e.preventDefault(); openZoneSheet(host, btn, select, zs); }
+    });
+  } catch (e) {
+    select.removeEventListener("change", sync);
+    select.removeAttribute("tabindex");
+    select.removeAttribute("aria-hidden");
+    row.classList.remove("enh");
+    if (btn.parentNode) btn.parentNode.removeChild(btn);
+    throw e;
+  }
+  return btn;
+}
+
+function openZoneSheet(host: HTMLElement, btn: HTMLElement, select: HTMLSelectElement, zs: Zone[]): void {
+  if (host.querySelector(".rp-zsheet")) return;
+  const overlay = document.createElement("div");
+  overlay.className = "rp-overlay";
+  const box = document.createElement("div");
+  box.className = "rp-modal rp-zsheet";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-labelledby", "rzt");
+  box.setAttribute("open", "");   // .rp-modal[open] 의 올라오는 모션을 그대로 쓴다
+  const cur = select.value;
+  box.innerHTML = `
+    <div class="rp-zsheet-head">
+      <h2 id="rzt" class="rp-zsheet-title">구역 선택</h2>
+      <button type="button" class="rp-zsheet-x" aria-label="닫기">✕</button>
+    </div>
+    <ul class="rp-zlist" role="listbox" aria-labelledby="rzt">${zs.map((z) => `
+      <li class="rp-zopt" role="option" data-id="${z.id}" tabindex="-1" aria-selected="${String(z.id) === cur}">
+        <span class="zi">${PIN}</span><span class="zn">${esc(z.name)}</span><span class="zc" aria-hidden="true">✓</span>
+      </li>`).join("")}</ul>`;
+  overlay.appendChild(box);
+
+  const opts: HTMLElement[] = Array.prototype.slice.call(box.querySelectorAll(".rp-zopt"));
+  const x = box.querySelector<HTMLElement>(".rp-zsheet-x")!;
+  let active: HTMLElement = opts.filter((o) => o.getAttribute("aria-selected") === "true")[0] || opts[0];
+  let closing = false;
+
+  const close = () => {
+    if (closing) return;
+    closing = true;
+    box.classList.add("closing");
+    overlay.classList.add("closing");
+    setTimeout(() => {
+      host.querySelectorAll("[data-zhid]").forEach((el) => { el.removeAttribute("aria-hidden"); el.removeAttribute("data-zhid"); });
+      document.body.classList.remove("rp-lock");
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      btn.setAttribute("aria-expanded", "false");
+      btn.focus();
+    }, reduced() ? 0 : 180);
+  };
+  const choose = (o: HTMLElement) => {
+    select.value = String(o.getAttribute("data-id"));
+    select.dispatchEvent(new Event("change"));
+    close();
+  };
+  const move = (i: number) => { active = opts[Math.max(0, Math.min(opts.length - 1, i))]; active.focus(); };
+
+  box.addEventListener("keydown", (e: KeyboardEvent) => {
+    const t = e.target as HTMLElement;
+    const inList = t.classList.contains("rp-zopt");
+    const i = opts.indexOf(t);
+    if (e.key === "Escape" || e.key === "Esc") { e.preventDefault(); close(); }
+    else if (e.key === "Tab") { e.preventDefault(); if (inList) x.focus(); else active.focus(); }   // 시트 안에서만 돈다: 닫기 ↔ 목록
+    else if (!inList) return;
+    else if (e.key === "ArrowDown" || e.key === "Down") { e.preventDefault(); move(i + 1); }
+    else if (e.key === "ArrowUp" || e.key === "Up") { e.preventDefault(); move(i - 1); }
+    else if (e.key === "Home") { e.preventDefault(); move(0); }
+    else if (e.key === "End") { e.preventDefault(); move(opts.length - 1); }
+    else if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") { e.preventDefault(); choose(t); }
+  });
+  box.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const o = t.closest ? (t.closest(".rp-zopt") as HTMLElement | null) : null;
+    if (o) choose(o);
+  });
+  x.addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+  // 뒤 화면은 스크린리더에서 숨기고 스크롤을 잠근다
+  Array.prototype.forEach.call(host.children, (el: Element) => { el.setAttribute("aria-hidden", "true"); el.setAttribute("data-zhid", ""); });
+  document.body.classList.add("rp-lock");
+  host.appendChild(overlay);
+  btn.setAttribute("aria-expanded", "true");
+  active.focus();
+}
+
 /** 서버에 닿지 못한 실패인지 — data-local 은 name="NetworkError", Supabase 는 fetch 실패 문구 */
 function isNetworkError(e: unknown): boolean {
   const x = e as { name?: string; message?: string };
@@ -218,16 +328,12 @@ function openDone(root: HTMLElement, d: { no: number; zone: string; now: string 
     <header class="rp-modal-head">
       <div class="check" aria-hidden="true">✓</div>
       <h2 id="rmt" class="rp-modal-title">접수되었습니다</h2>
-      <p class="rp-lead">담당 부서가 확인 후 조치합니다. 감사합니다.</p>
+      <p class="rp-lead">감사합니다.</p>
     </header>
     <dl class="rp-sum">
       <div><dt class="receipt">접수번호 <b>W-${esc(d.no)}</b></dt></div>
       <div><dt>위치 · 시각</dt><dd>${esc(d.zone)} · ${esc(d.now)}</dd></div>
     </dl>
-    <h3 class="rp-sec">이제 이렇게 처리돼요</h3>
-    <ol class="rp-next">${NEXT.map(([k, v], i) => `
-      <li class="rp-row"><span class="rp-glyph" aria-hidden="true">${i + 1}</span>
-        <span class="rp-row-text"><b>${esc(k)}</b><span>${esc(v)}</span></span></li>`).join("")}</ol>
     <div class="rp-modal-actions">
       <button type="button" class="btn primary big" id="again">한 건 더 접수</button>
       <button type="button" class="btn big" id="dclose">닫기</button>

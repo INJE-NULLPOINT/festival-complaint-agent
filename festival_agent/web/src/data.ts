@@ -2,7 +2,7 @@
 //
 // 백엔드 선택은 LLM 백엔드와 같은 방식이다.
 //   web/.env 에 VITE_SUPABASE_URL · VITE_SUPABASE_ANON_KEY 가 있으면  supabase
-//   없으면                                                          local 대역 (python webapi.py)
+//   없으면                                                          local 대역 (node server/webapi.ts)
 import { gateAdmin } from "./admin";
 import { localBackend } from "./data-local";
 import { supabaseBackend } from "./data-supabase";
@@ -60,14 +60,16 @@ export type ReviewItem = {
 export type ControlData = {
   sev: Severity[]; briefing: Briefing | null; feed: FeedItem[];
   pending: number; total: number; alerts: Alert[];
-  /** 운영자 확인 필요(유형 없음) 개수 · 그중 안전 의심. 서버가 아직 안 주면 없다 (D5-26 ④) */
-  review?: number; review_safety?: number;
-  /** 조치할 일 카드 (D5-29) — 서버가 rank_no 순서로 준다. 없으면(구버전 서버) 옛 유형 화면을 쓴다. */
-  issues?: Issue[];
-  /** 운영자가 처리할 확인 필요 목록 — 안전 의심이 먼저 (D5-32). 구버전 서버는 안 준다. */
-  review_items?: ReviewItem[];
+  /** 확인 안 한 알림 전체 개수 — alerts 는 그중 등급이 높은 3건만이다. */
+  alerts_total: number;
+  /** 운영자 확인 필요(유형 없음) 개수 · 그중 안전 의심 (D5-26 ④) */
+  review: number; review_safety: number;
+  /** 조치할 일 카드 (D5-29) — 서버가 rank_no 순서로 준다. */
+  issues: Issue[];
+  /** 운영자가 처리할 확인 필요 목록 — 안전 의심이 먼저 (D5-32) */
+  review_items: ReviewItem[];
   /** 운영자가 지운(숨긴) 민원 개수 (D5-30) */
-  deleted?: number;
+  deleted: number;
   /** 헤더 배지용 (D5-33). AI 해석 방식 — 서버(webapi)가 줄 때만 있다. Supabase 는 워커가 따로 돌아 화면이 알 수 없으므로 없다. */
   backend_llm?: "claude_code" | "anthropic" | "local" | string;
   /** 집계 창 안의 합성·재생(replay/demo/dev) 민원. on=false 면 배지를 숨긴다. */
@@ -80,6 +82,27 @@ export type DeletedItem = {
   id: number; raw_text: string; zone: string; zone_id: number | null;
   posted_at: string; deleted_at: string; label: string | null; status: string | null;
 };
+/** 'AI 동작 보기'(D5-62) — 내부 AI 가 도는 모습. 점수·계산식은 이 응답에만 들어 있다 (운영자 코드는 필요 없다). */
+export type DevLog = { id: number; created_at: string; agent: string; action: string; input_summary: string | null; output_summary: string | null;
+  reasoning: string | null; latency_ms: number | null; tokens_in: number | null; tokens_out: number | null };
+export type DevClassification = { feedback_id: number; raw_text: string; label: string | null; status: string | null; is_safety: number | null;
+  confidence: number | null; agent_note: string | null; suggested_label: string | null; processed_at: string | null };
+export type DevSeverity = { label: string; freq: number; score: number; grade: string; formula: string; spike_w: number | null; safety_w: number | null;
+  pending_w: number | null; as_of: string };
+export type DevCard = { issue_key: string; label: string; zone_name: string | null; grade: string; card_score: number; formula: string; freq: number; type_freq: number };
+export type DevLoop = { last_at: string | null; took_ms: number | null };
+export type DevFeed = {
+  max_log_id: number; max_cls_id: number; now: string;
+  logs: DevLog[]; classifications: DevClassification[]; severity: DevSeverity[]; cards: DevCard[];
+  status: { backend_llm: string; loops: Record<string, DevLoop>; tokens_today: { input: number; output: number } };
+};
+/** 마지막 갱신 시각 (D5-86) — 공개 읽기. 값이 없으면 null. worker_at = 워커 루프가 마지막으로 돈 시각, agent_at = 에이전트가 마지막으로 판단한 시각 */
+export type Freshness = { server_now: string; severity_at: string | null; agent_at: string | null; worker_at: string | null };
+/** 설정 화면(D5-90) */
+export type FestivalInfo = { name: string; region: string; start_date: string; end_date: string };
+export type ZoneSetting = { id: number; name: string; hidden: number; feedback_count: number };
+export type DepartmentSetting = { label: string; label_ko: string; department: string; contact: string };
+export type Settings = { festival: FestivalInfo; zones: ZoneSetting[]; departments: DepartmentSetting[] };
 export type ActionData = { sev: Severity[]; actions: Action[]; jobs: DocJob[] };
 
 export type Handlers = {
@@ -111,6 +134,19 @@ export interface Backend {
   restoreFeedback(id: number, code?: string): Promise<void>;
   /** 최근에 지운 민원 최대 50건 (최신순) — 토스트가 지나간 뒤에도 되돌릴 수 있게 (D5-42). 복구는 restoreFeedback. */
   listDeleted(code?: string): Promise<DeletedItem[]>;
+  /** 'AI 동작 보기' 데이터 (D5-62). since_* 보다 새로운 로그만 온다. 심사위원이 보는 화면이라 운영자 코드가 필요 없다. */
+  devFeed(since: { log: number; cls: number }): Promise<DevFeed>;
+  /** 마지막 갱신 시각 — 에이전트 멈춤 표시용. 운영자 코드가 필요 없다 (D5-86) */
+  freshness(): Promise<Freshness>;
+  // ── 설정 (D5-90) — 읽기는 코드가 필요 없고, 저장은 운영자 코드가 필요하다
+  getSettings(): Promise<Settings>;
+  saveFestival(f: FestivalInfo, code?: string): Promise<void>;
+  /** 새 구역 id 를 돌려준다 */
+  addZone(name: string, code?: string): Promise<number>;
+  renameZone(id: number, name: string, code?: string): Promise<void>;
+  /** 민원이 있는 구역도 지우지 않고 숨기기만 한다. 방문객 구역 선택에서 빠진다 */
+  setZoneHidden(id: number, hidden: boolean, code?: string): Promise<void>;
+  saveDepartment(label: string, department: string, contact: string, code?: string): Promise<void>;
   // ── 확인 필요 처리 (D5-32) — 모두 운영자 코드가 필요하다
   /** 유형 지정 (status='review' 일 때만). 안전·혼잡을 고르면 안전 의심으로 자동 처리된다 */
   resolveReview(id: number, label: string, code?: string): Promise<void>;

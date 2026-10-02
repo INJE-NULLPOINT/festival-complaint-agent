@@ -13,12 +13,14 @@ const changed = new Map<number, number>(); // id → 바뀐 시각
 
 type Doc = {
   festival: string; department: string; created_at: string; festival_info: string;
-  label_ko: string; count: number; score: number; grade: string; grade_ko: string;
-  formula: string; quotes: { raw_text: string; zone: string; time: string }[];
+  label_ko: string; count: number; grade: string; grade_ko: string;
+  basis?: string;   // 말로 쓴 판정 근거 (점수·계산식 대신, 서버가 넣는다)
+  quotes: { raw_text: string; zone: string; time: string }[];
   suggestions: string[];
 };
 
-function preview(d: Doc): string {
+/** now: 지금 관제가 보는 등급. 요청서의 등급은 작성 시점 값이라, 다르면 지금 등급을 옆에 같이 보인다 (D5-82). */
+function preview(d: Doc, now?: string): string {
   return `
     <article class="paper">
       <h3>축제 민원 조치요청서</h3>
@@ -28,8 +30,8 @@ function preview(d: Doc): string {
       <table>
         <tr><th>민원 유형</th><td>${esc(d.label_ko)}</td></tr>
         <tr><th>접수 건수</th><td>${d.count}건</td></tr>
-        <tr><th>심각도</th><td>${d.score}점 ${badge(d.grade)}</td></tr>
-        <tr><th>판정 근거</th><td class="mono">${esc(d.formula || "-")}</td></tr>
+        <tr><th>작성 시 심각도</th><td>${badge(d.grade)}${now && now !== d.grade ? ` <span class="muted small">지금</span> ${badge(now)}` : ""}</td></tr>
+        ${d.basis ? `<tr><th>판정 근거</th><td>${esc(d.basis)}</td></tr>` : ""}
       </table>
       <h4>2. 접수된 민원</h4>
       <ul>${d.quotes.map((q) => `<li>“${esc(q.raw_text)}” <span class="muted small">— ${esc(q.zone || "구역 미상")}${q.time ? `, ${esc(q.time)}` : ""}</span></li>`).join("")}</ul>
@@ -39,7 +41,7 @@ function preview(d: Doc): string {
 }
 
 /** 요청서 1건. 대체됨은 상태를 바꿀 수 없다 (새 요청서가 그 자리를 이어받았다). */
-function docItem(a: Action): string {
+function docItem(a: Action, now?: string): string {
   const doc: Doc | null = a.doc_json ? JSON.parse(a.doc_json) : null;
   const locked = a.status === "superseded";
   const fr = docFresh.of(a.id);
@@ -61,7 +63,7 @@ function docItem(a: Action): string {
         ${a.doc_url ? `<a class="btn" href="${esc(a.doc_url)}" target="_blank" rel="noopener">DOCX</a>` : ""}
       </div>
     </div>
-    ${doc ? `<div class="pv">${preview(doc)}</div>` : ""}
+    ${doc ? `<div class="pv">${preview(doc, now)}</div>` : ""}
   </li>`;
 }
 
@@ -73,6 +75,7 @@ export async function renderAction(root: HTMLElement): Promise<void> {
   const current = actions.filter((a) => a.status !== "superseded");
   const old = actions.filter((a) => a.status === "superseded");
   const targets = sev.filter((s) => s.label !== "positive");
+  const gradeNow = new Map(sev.map((s) => [s.label, s.grade]));
 
   docFresh.update(actions.map((a) => a.id));
   // 상태가 바뀐 요청서 표시: 처음 그릴 때는 비교할 게 없으니 건너뛴다. 바뀐 시각을 적어 두어, 곧바로 다시 그려져도 애니메이션이 처음부터 다시 돌지 않게 한다
@@ -97,23 +100,23 @@ export async function renderAction(root: HTMLElement): Promise<void> {
         return `<li>
           <div class="t-main">
             <span class="name">${typeChip(s.label)}</span>
-            ${badge(s.grade)} <span class="muted">${s.score.toFixed(1)}점 · ${s.freq}건</span>
+            ${badge(s.grade)} <span class="muted">${s.freq}건</span>
             ${state ? `<div class="t-state">${state}</div>` : ""}
           </div>
           <button class="btn ${hot && !sent ? "primary" : ""}" data-gen="${esc(s.label)}" ${busy ? "disabled" : ""}>
             ${sent ? "다시 생성" : "조치요청서 생성"}</button>
         </li>`;
-      }).join("")}</ul>` : stateBox({ icon: "inbox", title: "조치할 대상이 없습니다", hint: "판정된 민원이 생기면 심각도 순으로 나타납니다." })}
+      }).join("")}</ul>` : stateBox({ icon: "inbox", title: "조치할 대상 없음" })}
     </section>
 
     <section class="card">
       <h2>조치요청서 · 처리 현황</h2>
-      ${current.length ? `<ul class="docs">${current.map(docItem).join("")}</ul>`
-        : stateBox({ icon: "inbox", title: "아직 만든 조치요청서가 없습니다", hint: "위 조치 대상에서 [조치요청서 생성]을 누르면 여기에 나타납니다." })}
+      ${current.length ? `<ul class="docs">${current.map((a) => docItem(a, gradeNow.get(a.label))).join("")}</ul>`
+        : stateBox({ icon: "inbox", title: "조치요청서 없음" })}
       ${old.length ? `
         <button type="button" class="linkbtn" id="toggle-old" aria-expanded="${showOld}">
           ${showOld ? "대체된 요청서 접기" : `대체된 요청서 ${old.length}건 보기`}</button>
-        ${showOld ? `<ul class="docs old">${old.map(docItem).join("")}</ul>` : ""}` : ""}
+        ${showOld ? `<ul class="docs old">${old.map((a) => docItem(a)).join("")}</ul>` : ""}` : ""}
     </section>`;
 
   root.querySelectorAll<HTMLButtonElement>("[data-gen]").forEach((btn) =>
