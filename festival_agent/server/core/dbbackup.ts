@@ -6,7 +6,7 @@
 // - restore()            지금 연결된 DB(config 가 가리키는 곳)의 백업 대상 테이블을 파일 내용으로 **바꾼다** (한 트랜잭션).
 //                        운영 Supabase 면 cli 가 --live-db 와 확인 질문을 요구하고, 복원 직전 상태를 before_restore_*.json 으로 먼저 저장한다.
 //
-// 제외: operator_secret (운영자 코드 해시 — 파일에 남기지 않는다), admin_attempt·submit_rate (출처 해시·잠금 기록, 24시간짜리 임시 데이터).
+// 제외: source_key (출처 해시 키 — 파일에 남기지 않는다), submit_rate (출처 해시 기록, 24시간짜리 임시 데이터).
 // 파일 모양: { format, version, source, created_at, tables: { 이름: { columns: [...], rows: [[...], ...] } } }
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -20,13 +20,13 @@ export const VERSION = 1;
 export const PREFIX = "supabase_";                 // 자동 백업 (최근 keep 개만 남긴다)
 export const BEFORE_RESTORE_PREFIX = "before_restore_";   // 복원 직전 저장본 (자동으로 지우지 않는다)
 
-/** 백업 대상. 부모가 앞에 온다 (넣을 때 이 순서, 지울 때 반대 순서 — 외래키 때문). operator_secret 은 없다. */
+/** 백업 대상. 부모가 앞에 온다 (넣을 때 이 순서, 지울 때 반대 순서 — 외래키 때문). source_key 는 없다. */
 export const BACKUP_TABLES = [
   "festival", "zone", "department_map", "feedback", "classification", "severity", "alert",
   "action_request", "doc_job", "agent_task", "agent_log", "briefing", "issue", "classify_cache",
   "replay_state", "festival_info", "feedback_inbox",
 ] as const;
-export const EXCLUDED_TABLES = ["operator_secret", "admin_attempt", "submit_rate"] as const;
+export const EXCLUDED_TABLES = ["source_key", "submit_rate"] as const;
 
 export interface TableDump { columns: string[]; rows: unknown[][] }
 export interface BackupFile {

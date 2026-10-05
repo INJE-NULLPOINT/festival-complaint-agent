@@ -100,7 +100,7 @@ button { font: inherit; }
 }
 .brand { display: flex; align-items: center; gap: 10px; font-size: 17px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
-.live { font-size: 13px; padding: 3px 10px; border-radius: 99px; background: var(--line); color: var(--muted); }
+.live { font-size: 13px; padding: 3px 10px; border-radius: 99px; background: var(--line); color: var(--muted); white-space: nowrap; }
 .live.ok { background: color-mix(in srgb, var(--st-done) 16%, transparent); color: var(--st-done); font-weight: 600; }
 .live.ok::before { content: "● "; }
 .chip { font-size: 13px; padding: 3px 10px; border-radius: 99px; background: var(--line); color: var(--muted); white-space: nowrap; }
@@ -227,6 +227,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 20px 16px 40px; display: grid
 .paper th, .paper td { border: 1px solid #d9dde3; padding: 8px 10px; text-align: left; vertical-align: top; }
 .paper th { background: #eef2fb; width: 100px; white-space: nowrap; }
 .paper ul, .paper ol { padding-left: 20px; margin: 0; }
+.paper li { border-top-color: #d9dde3; }          /* 종이 안 목록 줄이 다크 테마에서 검게 보이지 않게 (.docs li 의 --line 을 물려받음) */
 
 /* ── 버튼·폼 ── */
 .btn {
@@ -769,18 +770,8 @@ body:not(.visitor) .kpi-l { font-weight: 600; }
 body:not(.visitor) .kpi-v { font-size: 30px; font-weight: 800; }
 
 /* 표 머리 회색 · 행은 구분선만 (조치요청서 표) */
-body:not(.visitor) .paper th { background: var(--fill); }
+body:not(.visitor) .paper th { background: #f3f3f3; color: #1b1b1b; }          /* 종이는 다크 테마에서도 흰색 — 머리칸도 밝은 회색·어두운 글자로 고정 */
 body:not(.visitor) .paper table { border-collapse: collapse; }
-
-/* 모달 — 운영자 코드 창: 가운데 흰 카드, 8px, 바깥은 어두운 막 */
-body:not(.visitor) .adm-modal { border: 1px solid var(--line); border-radius: 12px; }
-body:not(.visitor) .adm-title { font-size: 20px; }
-body:not(.visitor) .adm-field input,
-body:not(.visitor) .adm-eye,
-body:not(.visitor) .adm-actions button,
-body:not(.visitor) .adm-err { border-radius: 8px; }
-body:not(.visitor) .adm-field input { border-width: 1px; border-color: var(--line); }
-body:not(.visitor) .adm-actions button { border-width: 1px; }
 
 /* ── 관리자 애니메이션 3가지 (D5-44) — 색은 그대로. 모두 body:not(.visitor) 안에서만, 움직임 줄이기 설정이면 맨 아래 규칙이 전부 끈다 ──
    ① '즉시' 가 새로 된 카드: 테두리가 천천히 두 번 숨 쉬고 멈춤(2.4s × 2). 다시 그려져도 --pd(지난 시간)만큼 앞당겨 이어서 재생.

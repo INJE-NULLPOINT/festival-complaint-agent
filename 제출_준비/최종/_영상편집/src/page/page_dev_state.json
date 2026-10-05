@@ -1,0 +1,37 @@
+{
+ "file": "page_dev_state.png",
+ "note": "좌표는 CSS px (PNG 는 가로세로 2배). origin 은 PNG 왼쪽 위가 페이지의 어디인지",
+ "cssWidth": 440,
+ "cssHeight": 397,
+ "scale": 2,
+ "origin": {
+  "x": 1465,
+  "y": 0
+ },
+ "zones": [
+  {
+   "name": "머리 (제목·연결 상태)",
+   "selector": ".dev-head",
+   "x": 1,
+   "y": 0,
+   "w": 439,
+   "h": 65
+  },
+  {
+   "name": "탭",
+   "selector": ".dev-tabs",
+   "x": 1,
+   "y": 65,
+   "w": 439,
+   "h": 45
+  },
+  {
+   "name": "표",
+   "selector": "#dev-body .dev-table",
+   "x": 13,
+   "y": 202,
+   "w": 415,
+   "h": 179
+  }
+ ]
+}

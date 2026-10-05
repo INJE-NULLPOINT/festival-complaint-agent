@@ -152,7 +152,7 @@ export async function run_set(name: string, tmpRoot: string): Promise<Res[]> {
     if ((await db.pending_count()) === 0) break;
     await classifier.run_once(20);
   }
-  await supervisor.run_once(60);
+  await supervisor.run_once();
   const cards = await issues.list_active();
   return (await judge_cards(meta, cards)).map(([n, ok, d]) => [`[${name}] ${n}`, ok, d] as Res);
 }

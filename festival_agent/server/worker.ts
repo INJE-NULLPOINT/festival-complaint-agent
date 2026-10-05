@@ -115,36 +115,44 @@ export async function ingest_tick(): Promise<number> {
 }
 
 /** 웹 접수 · 리플레이 투입 + 분류. 처리한 건수를 돌려준다 (--once 용). */
-export async function fast_path(batch: number, window: number): Promise<number> {
-  return (await ingest()) + (await classify_step(batch, window));
+export async function fast_path(batch: number): Promise<number> {
+  return (await ingest()) + (await classify_step(batch));
 }
 
 /** ①분류 한 배치. 대기 건수를 돌려준다.
  *  분류가 끝나면 심각도 스냅샷을 바로 남긴다. 계산은 결정적 함수라 LLM 비용이 없고, 웹 관제 화면은 이 스냅샷을 실시간 구독으로 받는다. */
-export async function classify_step(batch: number, window: number): Promise<number> {
+export async function classify_step(batch: number): Promise<number> {
   const { run_once: classify } = await import("./agents/classifier.ts");
   const pending = await db.pending_count();
   if (pending) {
     await classify(batch);
-    const ranked = await db.ranked(window);
-    if (ranked.length) await db.save_severity(ranked, `${window}min`);
-    await issues.refresh(window);             // 분류가 끝난 즉시 카드에도 반영 (문구는 ④가 따로 씀)
+    const ranked = await db.ranked();
+    if (ranked.length) await db.save_severity(ranked, db.SEVERITY_BASIS);
+    await issues.refresh();             // 분류가 끝난 즉시 카드에도 반영 (문구는 ④가 따로 씀)
   }
   return pending;
 }
 
+/** 지금 DB 기준으로 심각도 스냅샷과 이슈 카드를 한 번 다시 계산한다 (규칙 계산만, LLM 호출 없음).
+ *  워커 시작 때 부른다 — 새 민원이 올 때까지 시간 지남(S-04 1시간)·조치 완료 반영이 멈춰 있지 않게. */
+export async function recompute_now(): Promise<void> {
+  const ranked = await db.ranked();
+  if (ranked.length && !(await db.severity_recorded(ranked, db.SEVERITY_BASIS))) await db.save_severity(ranked, db.SEVERITY_BASIS);
+  await issues.refresh();
+}
+
 /** 웹의 '조치요청서 생성' 버튼 요청을 처리한다. */
-export async function doc_jobs(window: number): Promise<void> {
+export async function doc_jobs(): Promise<void> {
   const dispatcher = await import("./agents/dispatcher.ts");
   for (const job of await db.claim_doc_jobs()) {
     const label = job.label;
     try {
-      const item = (await db.ranked(window)).find((r) => r.label === label);
-      if (!item) throw new Error("최근 창에 해당 유형 민원이 없습니다");
+      const item = (await db.ranked()).find((r) => r.label === label);
+      if (!item) throw new Error("처리 안 된 해당 유형 민원이 없습니다");
       const { res, row } = await DISPATCH_LOCK.run(async () => {
         const conn = await db.connect();
         const before = (await conn.execute("SELECT MAX(id) m FROM action_request")).fetchone()?.m || 0;
-        const res = await dispatcher.run_for(label, item.score, item.grade, item.formula, window);
+        const res = await dispatcher.run_for(label, item.score, item.grade, item.formula);
         const row = (await conn.execute("SELECT MAX(id) m FROM action_request WHERE label=? AND id>?", [label, before])).fetchone();
         return { res, row };
       });
@@ -200,19 +208,19 @@ async function _loop(fn: () => Promise<void>, interval: number): Promise<never> 
 }
 
 /** 웹 요청 전용 루프. Agent Path 와 따로 돌아 요청 후 바로 작성에 들어간다. */
-export function doc_loop(window: number, interval: number): Promise<never> {
-  return _loop(() => track("doc_jobs", () => doc_jobs(window)), interval);
+export function doc_loop(interval: number): Promise<never> {
+  return _loop(() => track("doc_jobs", () => doc_jobs()), interval);
 }
 
 const ISSUE_INTERVAL = 5.0;
-const PURGE_INTERVAL = 600.0;          // 출처 해시(submit_rate)·운영자 코드 실패 기록은 접수·실패가 없어도 10분마다 지운다
+const PURGE_INTERVAL = 600.0;          // 출처 해시(submit_rate)는 접수가 없어도 10분마다 지운다
 
 /** 관제 카드 갱신 루프. 건수·마지막 시각·최신 민원·조치 그룹을 LLM 없이 바로 반영한다.
  *  조치 상태를 사람이 바꾸거나 시간이 흘러 '최근' 값이 바뀌는 것도 여기서 따라간다. 값이 그대로면 쓰지 않으므로 화면이 매번 다시 그려지지 않는다. */
-export function issue_loop(window: number): Promise<never> {
+export function issue_loop(): Promise<never> {
   let last_purge = 0;
   return _loop(() => track("issues", async () => {
-    await issues.refresh(window);
+    await issues.refresh();
     await review.raise_stale_alerts();        // 안전 의심 확인 필요가 15분 넘게 방치되면 알림 1회 (시간 기반이라 여기서)
     if (Date.now() / 1000 - last_purge >= PURGE_INTERVAL) {      // 24시간 지난 출처 해시·실패 기록 정리 (D5-33)
       last_purge = Date.now() / 1000;
@@ -237,24 +245,20 @@ export async function ingest_loop(interval: number, listener: inbox_listen.Liste
   }
 }
 
-/** ②감시 → ③조치 → ④통합. 마지막에 통합이 합친다. 세 에이전트가 같은 창을 본다. 다르면 건수·점수가 서로 어긋난다. */
-export async function agent_path(window: number, given_plan: Plan | null = null): Promise<void> {
+/** ②감시 → ③조치 → ④통합. 마지막에 통합이 합친다. 세 에이전트가 같은 처리 안 된 민원을 본다. */
+export async function agent_path(given_plan: Plan | null = null): Promise<void> {
   const dispatcher = await import("./agents/dispatcher.ts");
   const monitor = await import("./agents/monitor.ts");
   const planner = await import("./agents/planner.ts");
   const supervisor = await import("./agents/supervisor.ts");
 
   // 계획(D5-65): 이번 주기에 무엇을 할지 계획 에이전트가 정한다. 분류(①)는 별도 루프에서 항상 돌고, ②는 항상 돈다(필수 단계).
-  const plan = given_plan ?? await planner.run_once(window);
-  console.log(`  계획     창 ${plan.window_min}분 · 집중 [${plan.focus_labels.join(",")}] · ③${plan.run_dispatcher ? "O" : "X"} ④${plan.run_supervisor ? "O" : "X"}` +
+  const plan = given_plan ?? await planner.run_once();
+  console.log(`  계획     집중 [${plan.focus_labels.join(",")}] · ③${plan.run_dispatcher ? "O" : "X"} ④${plan.run_supervisor ? "O" : "X"}` +
     (plan.overrides.length ? ` · 안전 규칙으로 보정 ${plan.overrides.length}건` : "") + ` — ${plan.reason.slice(0, 80)}`);
 
-  let out = await monitor.run_once(window);
+  let out = await monitor.run_once();
   if (out) console.log(`  ②감시   ${out.slice(0, 120)}`);
-  if (plan.window_min < window) {                                            // 급증이 의심돼 짧은 창으로 한 번 더 (기록은 남기지 않는다)
-    out = await monitor.run_once(plan.window_min, { snapshot: false });
-    if (out) console.log(`  ②재확인 ${plan.window_min}분 · ${out.slice(0, 100)}`);
-  }
 
   const targets = plan.run_dispatcher
     ? (await dispatcher.pending_labels()).filter((p: any) => p.grade === "immediate" || !plan.focus_labels.length || plan.focus_labels.includes(p.label))
@@ -264,13 +268,13 @@ export async function agent_path(window: number, given_plan: Plan | null = null)
       // 락을 기다리는 사이 웹 요청으로 같은 유형 문서가 생겼을 수 있다
       const still = new Set((await dispatcher.pending_labels()).map((p: any) => p.label));
       if (!still.has(item.label)) return;
-      const res = await dispatcher.run_for(item.label, item.score, item.grade, item.formula, window);
+      const res = await dispatcher.run_for(item.label, item.score, item.grade, item.formula);
       if (res) console.log(`  ③조치   ${String(res).slice(0, 120)}`);
     });
   }
 
   if (plan.run_supervisor) {
-    out = await supervisor.run_once(window);
+    out = await supervisor.run_once();
     if (out) console.log(`  ④통합   ${out.slice(0, 160)}`);
   }
 
@@ -303,12 +307,10 @@ async function main(): Promise<void> {
       batch: { type: "string", default: "20" },              // 분류 배치 크기
       "no-agents": { type: "boolean", default: false },      // ①분류만 실행
       once: { type: "boolean", default: false },             // 한 주기만
-      window: { type: "string" },                            // 심각도 창(분)
     },
   });
   const interval = Number(a.interval), agentInterval = Number(a["agent-interval"]), batch = Number(a.batch);
   const noAgents = a["no-agents"] as boolean, once = a.once as boolean;
-  const window = a.window !== undefined ? Number(a.window) : config.DEFAULT_WINDOW_MIN;
 
   if (sqlite !== null) {
     // 운영 Supabase 와 끊고 SQLite 파일로 돈다. 환경변수도 비워 자식 코드(로깅·다른 모듈)가 URL 을 다시 읽지 않게 한다.
@@ -332,18 +334,19 @@ async function main(): Promise<void> {
 
   await db.init_db();
   await replay.ensure();
+  await _guarded(recompute_now);
   console.log(`[worker] 시작 · Fast ${interval}s · Agent ${noAgents ? "off" : `${agentInterval}s`}`);
 
   if (once) {
     await _guarded(async () => {
-      const n = await fast_path(batch, window);
-      await issues.refresh(window);
+      const n = await fast_path(batch);
+      await issues.refresh();
       if (n) console.log(`[worker] 처리 ${n}건`);
       if (!noAgents) {
-        await doc_jobs(window);
+        await doc_jobs();
         if (n) {
           console.log("[worker] Agent Path 실행");
-          await agent_path(window);
+          await agent_path();
         }
       }
     });
@@ -353,25 +356,25 @@ async function main(): Promise<void> {
 
   await db.set_worker_status("_backend", 0, true, llm.backend());
   void warmup().then((ok) => { if (llm.backend() === "anthropic") console.log(`[worker] 준비 호출 ${ok ? "완료" : "실패 (무시하고 계속)"}`); });   // 첫 분류 콜드스타트 줄이기
-  void issue_loop(window);
+  void issue_loop();
   // Postgres 면 접수 알림(LISTEN/NOTIFY)으로 바로 깨어난다. 못 받아도 수거 루프의 폴링이 예비로 받는다.
   const listener = db.is_pg() ? inbox_listen.start_listener(() => inbox_wake.notify(), (m) => console.log(m)) : null;
   void ingest_loop(interval, listener);
-  if (!noAgents) void doc_loop(window, Math.max(interval, SLOW_POLL));
+  if (!noAgents) void doc_loop(Math.max(interval, SLOW_POLL));
 
   let agentsRunning = false;
   let lastAgent = 0;                     // 직전 Agent Path 가 끝난 시각
   let processedSinceAgent = 0;
 
   const runAgents = async () => {
-    await _guarded(() => track("agents", () => agent_path(window)));
+    await _guarded(() => track("agents", () => agent_path()));
     lastAgent = Date.now() / 1000;
     agentsRunning = false;
   };
 
   for (;;) {
     try {
-      const n = await track("classify", () => classify_step(batch, window));
+      const n = await track("classify", () => classify_step(batch));
       processedSinceAgent += n;
       if (n) console.log(`[worker] 분류 ${n}건`);
       if (n > batch && (await db.pending_count()) < n) continue;   // 대기가 한 배치보다 많고 줄어들고 있으면 쉬지 않고 이어서 (못 줄이면 기다린다)

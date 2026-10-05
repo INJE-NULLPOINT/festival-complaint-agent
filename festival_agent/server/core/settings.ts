@@ -2,7 +2,7 @@
 //
 // 읽기: DB 표(festival · zone · department_map)가 원천이다. config 값은 **DB 가 비었을 때의 기본값**일 뿐이다 (init_db 가 처음 한 번만 시드).
 //   짧게(5초) 캐시한다 — 워커·웹 서버가 따로 떠 있어도 5초 안에 바뀐 설정을 본다. 쓰기는 이 프로세스의 캐시를 바로 비운다.
-// 쓰기(운영자 코드 필요 — webapi 가 admin.verify, Supabase 는 schema.sql 의 RPC 가 admin_gate): save_festival · add_zone · rename_zone · set_zone_hidden · save_department.
+// 쓰기 (webapi 와 schema.sql 의 같은 이름 RPC): save_festival · add_zone · rename_zone · set_zone_hidden · save_department.
 //   구역은 지우지 않는다(민원이 달려 있다) — 이름 변경·숨김만. 연락처는 형식(숫자와 하이픈)을 검사한다.
 // 기본 연락처(055-000-000x)인 동안에는 화면이 '(예시 번호)'를 붙이도록 is_example=true 를 내려 준다.
 import { config } from "./config.ts";
@@ -91,7 +91,7 @@ export async function get_settings(): Promise<Row> {
   return { festival: await festival(), zones: await zone_rows(), departments };
 }
 
-// ── 쓰기 (운영자 코드 검사는 호출하는 쪽) ──
+// ── 쓰기 ──
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const clean = (s: unknown, max: number, what: string): string => {
   const v = typeof s === "string" ? s.trim() : "";

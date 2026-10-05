@@ -1,6 +1,6 @@
 // 관제 '지금 조치할 일' 카드 (D5-29). (core/issues.py 와 1:1)
 //
-// 카드 = (유형, 구역). 심각도 창 안의 status='done' 민원만 쓴다 (positive·review 제외).
+// 카드 = (유형, 구역). 처리 안 된 status='done' 민원만 쓴다 — 조치요청서가 완료된 유형의 이전 민원은 빠진다 (positive·review 제외).
 // 구역이 없는 민원(zone_id NULL)은 '구역 미상' 카드 하나로 모은다.
 //
 // 결정적인 것 (이 모듈이 계산 — 같은 입력이면 같은 결과)
@@ -31,7 +31,7 @@ import { compute_severity } from "./severity.ts";
 export type Row = Record<string, any>;
 
 export const GRADE_ORDER: Record<string, number> = { immediate: 0, high: 1, mid: 2, low: 3 };
-export const GROUP_ORDER: Record<string, number> = { main: 0, in_progress: 1, done: 2 };
+export const GROUP_ORDER: Record<string, number> = { main: 0, in_progress: 1 };
 
 export const TOP_N = 3;               // ④가 문장을 만드는 카드 수
 export const MAIN_MAX = 5;            // 본 목록 최대 장수 (넘치면 group='more')
@@ -82,15 +82,15 @@ const _dumps = (v: unknown): string => JSON.stringify(v);
 // ── 카드 계산 (결정적) ──
 
 /** 지금 상태에서 카드 목록을 만든다. 정렬·rank_no·grp 까지 채워 돌려준다. */
-export async function build_cards(window_min: number | null = null): Promise<Row[]> {
-  const win = window_min || config.DEFAULT_WINDOW_MIN;
-  const rows = (await db.window_rows(win)).map((r) => ({ ...r }));
-  const ranked = await db.ranked(win);
+export async function build_cards(): Promise<Row[]> {
+  const win = config.DEFAULT_WINDOW_MIN;                  // 카드 최신도(R) 감쇠 기준 — 집계 범위가 아니다
+  const rows = (await db.open_rows()).map((r) => ({ ...r }));
+  const ranked = await db.ranked();
   const ref = await db.data_now();
   const zone_names = new Map<number, string>((await db.zones()).map((z) => [z.id as number, z.name as string]));
   const actions = await db.latest_actions();
   const dept_map = await settings.department_map();         // 담당 부서·연락처는 DB(운영자 설정) 기준 (D5-90)
-  const win_total = ranked.reduce((s, r) => s + (r.freq as number), 0);       // 유형별 건수의 합 = 심각도 계산의 창 전체 건수
+  const win_total = ranked.reduce((s, r) => s + (r.freq as number), 0);       // 유형별 건수의 합 = 심각도 계산의 전체 건수
 
   const groups = new Map<string, { label: string; zone_id: number | null; items: Row[] }>();
   for (const r of rows) {
@@ -192,9 +192,7 @@ function _card(sev: Row, zone_id: number | null, items: Row[], win: number, ref:
     new_since = Boolean(act!.created_at) && first_in > act!.created_at;
     raw_group = new_since ? "main" : "in_progress";
   } else if (status === "done") {
-    const closed = act!.closed_at || act!.created_at || "";
-    recurred = items.some((i) => (i.ingested_at || "") > closed);        // 적재 시각(실제 시계)으로 비교
-    raw_group = recurred ? "main" : "done";
+    recurred = true;      // 완료 시각 이전 민원은 이미 빠졌다 — 이 카드의 민원은 전부 조치 완료 뒤에 새로 들어온 것
   }
 
   const [dept, contact] = dept_map[label] ?? ["미지정", "-"];
@@ -433,8 +431,8 @@ function _computed_values(c: Row): unknown[] {
  * 새 카드는 템플릿 문장으로 넣는다. 계산 열(건수·마지막 시각·최신 민원 포함)만 갱신하고,
  * AI 문장(title·actions·evidence_quotes)은 text_source 가 'template' 인 행만 다시 쓴다. 값이 그대로면 쓰지 않는다.
  */
-export async function refresh(window_min: number | null = null): Promise<[number, Row[]]> {
-  const cards = await build_cards(window_min);
+export async function refresh(): Promise<[number, Row[]]> {
+  const cards = await build_cards();
   const now = db.now();
   let changed = 0;
   const cols = _COMPUTED.join(", ");
@@ -539,8 +537,8 @@ export function needs_text(card: Row, row: Row | null | undefined, now: Date | n
 }
 
 /** ④ 호출 전 계획. 카드를 새로 계산·저장하고 상위 TOP_N 중 문장을 만들 카드를 고른다. */
-export async function plan(window_min: number | null = null): Promise<Row> {
-  const [, cards] = await refresh(window_min);
+export async function plan(): Promise<Row> {
+  const [, cards] = await refresh();
   const top = cards.slice(0, TOP_N);
   const rows = await stored();
   const now = new Date();
@@ -553,8 +551,8 @@ export async function plan(window_min: number | null = null): Promise<Row> {
  * source='llm'   검사에 실패했거나 문장을 주지 않은 카드는 템플릿으로 저장하고 agent_log 에 사유를 남긴다.
  * source='local' 규칙 기반 대역 — 템플릿 문장을 그대로 저장한다 (검사 대상 아님).
  */
-export async function apply_entries(entries: unknown, source = "llm", window_min: number | null = null): Promise<Row> {
-  const p = await plan(window_min);
+export async function apply_entries(entries: unknown, source = "llm"): Promise<Row> {
+  const p = await plan();
   const list = Array.isArray(entries) ? entries : [];
   const by_key = new Map<string, Row>();
   for (const e of list) {

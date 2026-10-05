@@ -34,7 +34,7 @@ test("test_감시_통합은_모델이_도구를_직접_고르는_agent_모드다
     const seen: Req[] = [];
     llm.set_client(fakeClient([() => ({ stop: "end_turn", blocks: [{ type: "text", text: "끝" }] })], seen));
     try {
-      await withEnv("LLM_BACKEND", "anthropic", async () => { await monitor.run_once(60); await supervisor.run_once(60); });
+      await withEnv("LLM_BACKEND", "anthropic", async () => { await monitor.run_once(); await supervisor.run_once(); });
     } finally { llm.set_client(null); }
     assert.deepEqual(seen[0].tools.map((x: any) => x.name), ["get_window_stats", "score_label", "save_snapshot", "raise_alert"]);
     assert.deepEqual(seen[1].tools.map((x: any) => x.name), ["read_agent_results", "rank_actions", "rank_issues", "write_briefing"]);
@@ -50,12 +50,12 @@ test("test_감시_같은_도구를_같은_인자로_다시_부르면_결과를_�
     const seen: Req[] = [];
     await withEnv("LLM_BACKEND", "anthropic", async () => {
       llm.set_client(fakeClient([
-        () => tools(["get_window_stats", { window_min: 60 }], ["score_label", { label: "safety" }]),
-        () => tools(["get_window_stats", { window_min: 60 }], ["score_label", { label: "safety" }], ["score_label", { label: "parking" }]),   // 앞의 둘은 이미 안 결과
+        () => tools(["get_window_stats", {}], ["score_label", { label: "safety" }]),
+        () => tools(["get_window_stats", {}], ["score_label", { label: "safety" }], ["score_label", { label: "parking" }]),   // 앞의 둘은 이미 안 결과
         () => tool("raise_alert", { label: "safety", kind: "safety_threshold", detail: "안전 3건 — 즉시 조치 등급입니다." }),
         () => ({ stop: "end_turn", blocks: [{ type: "text", text: "끝" }] }),
       ], seen));
-      try { await monitor.run_once(60); } finally { llm.set_client(null); }
+      try { await monitor.run_once(); } finally { llm.set_client(null); }
     });
     assert.equal(seen.length, 4);                                                  // 어떤 도구를 부를지는 그대로 모델이 정한다
     const logs = await all(db, "SELECT action, input_summary, reasoning FROM agent_log WHERE agent='monitor' AND action IN ('get_window_stats','score_label')");

@@ -25,10 +25,6 @@ export const config = {
   SUPABASE_SERVICE_KEY: env("SUPABASE_SERVICE_KEY"),
   SUPABASE_BUCKET: env("SUPABASE_BUCKET", "docs"),
 
-  // ── 운영자 코드 (core/admin.ts) ──
-  // 민원 지우기·되돌리기, 조치 상태 변경, 조치요청서 생성은 이 코드가 맞을 때만 실행한다. 비어 있으면 그 동작을 전부 거부한다.
-  ADMIN_CODE: env("ADMIN_CODE"),
-
   // ── 모델 ──
   // 에이전트별로 effort 를 다르게 준다. 분류는 단순 판정이라 low 로 충분하고, 통합 에이전트는 결론을 내리는 자리라 high.
   MODEL: "claude-opus-5-5",
@@ -97,13 +93,14 @@ export const config = {
   W_PENDING: 1.2,        // S-06 미조치 경과 가중
 
   SAFETY_THRESHOLD: 3,       // S-04 안전 N건 이상이면 무조건 immediate
+  SAFETY_ZONE_WINDOW_MIN: 60, // S-04 같은 구역 안전 민원 3건을 세는 시간 (경찰청 112 반복신고 '1시간·3회')
   SPIKE_WINDOW_MIN: 15,      // S-03 급증 판정 구간
   SPIKE_BASELINE_MIN: 60,    // S-03 비교 기준 구간
   SPIKE_MULTIPLIER: 2.0,     // S-03 급증 판정 배수
   SPIKE_MIN_RECENT: 3,       // B-02 급증으로 보려면 최근 구간에 최소 이 건수
   PENDING_MINUTES: 30,       // S-06 미조치 경과 기준
 
-  DEFAULT_WINDOW_MIN: 60,    // 기본 심각도 윈도우
+  DEFAULT_WINDOW_MIN: 60,    // 관제 카드 최신도(R) 감쇠 기준(분) — 심각도 집계 범위가 아니다 (집계는 처리 안 된 민원 누적)
 
   // ── 경계 규칙 B-01 ~ B-04 ──
   MIN_WINDOW_TOTAL: 10,           // B-01 빈도비 = freq / max(창 전체 건수, 이 값)

@@ -1,7 +1,6 @@
 // 관제 — 운영요원이 띄워 두는 화면. 실시간 구독으로 다시 그려진다.
 // 읽는 순서를 고정한다: ① 결론(브리핑) → ② 지금 조치할 일 카드(1위 크게·나머지 행) → ③ 알림 → ④ 유형별 순위(접힘)·유입.
 // 3초 안에 "지금 제일 위험한 것 1개" 가 읽혀야 한다 (할일 D5-15). 카드는 '무엇이 · 어디서 · 무엇부터 · 무엇을 할지' 를 한 장에 담는다 (D5-29).
-import { storedCode } from "../admin";
 import { contactHtml } from "./contact";
 import { kpiRow } from "./kpi";
 import { api, zones, type DeletedItem, type Issue, type IssueAction, type Quote, type ReviewItem, type Severity } from "../data";
@@ -14,7 +13,7 @@ const open = new Set<string>();       // 펼친 유형 행 (다시 그려도 유
 const openAlerts = new Set<number>(); // 펼친 알림
 const openFeed = new Set<number>();   // 펼친 유입 원문
 const openIssue = new Set<string>();  // 펼친 카드(행) — issue_key
-const grpOpen = new Set<string>();    // 펼친 묶음(그 밖 · 조치 중 · 조치 완료 · 유형별 순위)
+const grpOpen = new Set<string>();    // 펼친 묶음(그 밖 · 조치 중 · 유형별 순위)
 
 const name = (label: string) => LABELS[label] ?? label;
 
@@ -88,7 +87,6 @@ export async function renderControl(root: HTMLElement): Promise<void> {
   const main = cards.filter((c) => c.grp === "main");
   const more = cards.filter((c) => c.grp === "more");
   const prog = cards.filter((c) => c.grp === "in_progress");
-  const done = cards.filter((c) => c.grp === "done");
   const lead = main[0];
 
   const b = d.briefing;
@@ -151,7 +149,6 @@ export async function renderControl(root: HTMLElement): Promise<void> {
       : `<section class="card">${stateBox({ icon: "check", title: "지금 바로 조치할 일 없음" })}</section>`}
     ${group("more", "그 밖", more, main.length + 1, zoneName)}
     ${group("in_progress", "조치 중", prog, 1, zoneName)}
-    ${group("done", "조치 완료", done, 1, zoneName)}
 
     ${alerts.length ? `<ul class="alerts" aria-label="미확인 알림">${alerts.map((a) => { const fr = alertFresh.of(a.id); return `
       <li class="alert ${openAlerts.has(a.id) ? "open" : ""}${fr.cls}" style="${fr.style}" data-id="${a.id}">
@@ -279,20 +276,15 @@ async function removeFeedback(id: number): Promise<void> {
       setTimeout(() => el.classList.add("gone"), 200);
     });
   };
-  // 운영자 코드를 이미 입력했으면 바로 숨긴다. 아직이면 코드 입력 창이 뜨므로, 입력을 마친 뒤에 숨긴다(창이 떠 있는 동안 항목이 사라졌다 나타나지 않게).
-  const early = !!storedCode();
-  if (early) hide();
+  hide();
   try {
     await api.deleteFeedback(id);
   } catch (e) {
-    if (early) {
-      hidden.delete(id);
-      if (lastRoot) void renderControl(lastRoot);   // 숨겼던 것을 되살린다
-    }
+    hidden.delete(id);
+    if (lastRoot) void renderControl(lastRoot);   // 숨겼던 것을 되살린다
     toast((e as Error).message, "warn");
     return;
   }
-  if (!early) hide();
   toastAction("지웠습니다", "되돌리기", async () => {
     try {
       await api.restoreFeedback(id);
@@ -307,7 +299,7 @@ async function removeFeedback(id: number): Promise<void> {
 }
 
 /** 확인 필요 항목 하나를 처리한다: 유형 지정(resolve) 또는 유형 없음으로 닫기(dismiss). 처리되면 목록에서 빠지고 5초 동안 [되돌리기](reopen).
- *  운영자 코드를 이미 입력했으면 바로 숨기고, 아직이면 코드 입력 창이 뜬 뒤(입력을 마치면) 숨긴다 — 지우기와 같다. */
+ */
 async function processReview(id: number, kind: "resolve" | "dismiss", label?: string): Promise<void> {
   const hide = () => {
     hiddenReview.add(id);
@@ -317,20 +309,16 @@ async function processReview(id: number, kind: "resolve" | "dismiss", label?: st
       setTimeout(() => el.classList.add("gone"), 200);
     });
   };
-  const early = !!storedCode();
-  if (early) hide();
+  hide();
   try {
     if (kind === "resolve") await api.resolveReview(id, label!);
     else await api.dismissReview(id);
   } catch (e) {
-    if (early) {
-      hiddenReview.delete(id);
-      if (lastRoot) void renderControl(lastRoot);   // 숨겼던 것을 되살린다
-    }
+    hiddenReview.delete(id);
+    if (lastRoot) void renderControl(lastRoot);   // 숨겼던 것을 되살린다
     toast((e as Error).message, "warn");
     return;
   }
-  if (!early) hide();
   toastAction(kind === "resolve" ? `유형 지정 (${name(label!)})` : "유형 없음으로 닫았습니다", "되돌리기", async () => {
     try {
       await api.reopenReview(id);
@@ -393,7 +381,7 @@ function whenText(iso: string): string {
   return t.startsWith(today) ? t.slice(11, 16) : `${t.slice(5, 10)} ${t.slice(11, 16)}`;
 }
 
-/** 지운 민원 패널: 최근 지운 것부터, 행마다 원문(마스킹됨) · 구역 · 지운 시각 · 원래 유형 + [되돌리기]. 운영자 코드가 필요한 목록이라 열 때 코드 창이 뜰 수 있다. */
+/** 지운 민원 패널: 최근 지운 것부터, 행마다 원문(마스킹됨) · 구역 · 지운 시각 · 원래 유형 + [되돌리기]. */
 function dlPanel(): string {
   const items = dlItems;
   return `
@@ -449,7 +437,7 @@ function paintDeleted(root: HTMLElement): void {
 
 async function toggleDeleted(root: HTMLElement): Promise<void> {
   if (dlOpen) { dlOpen = false; syncDeleted(root); return; }
-  // 열기: 목록을 가져온다. 운영자 코드가 없으면 코드 창이 뜨고, 취소하거나 실패하면 열지 않는다.
+  // 열기: 목록을 가져온다. 실패하면 열지 않는다.
   try {
     dlItems = await api.listDeleted();
   } catch (e) {
@@ -465,7 +453,6 @@ async function toggleDeleted(root: HTMLElement): Promise<void> {
 }
 
 async function refreshDeleted(root: HTMLElement): Promise<void> {
-  if (!storedCode()) return;            // 코드를 아직 안 넣었으면 묻지 않는다 (열 때 이미 입력했을 것)
   dlRefreshing = true;
   try {
     dlItems = await api.listDeleted();
@@ -492,7 +479,7 @@ async function restoreOne(root: HTMLElement, id: number): Promise<void> {
   if (lastRoot) void renderControl(lastRoot);
 }
 
-/** 접이식 묶음(그 밖 · 조치 중 · 조치 완료). 비어 있으면 그리지 않는다. */
+/** 접이식 묶음(그 밖 · 조치 중). 비어 있으면 그리지 않는다. */
 function group(key: string, title: string, list: Card[], startNo: number, zoneName: Map<number, string>): string {
   if (!list.length) return "";
   return `

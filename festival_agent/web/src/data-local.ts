@@ -1,22 +1,14 @@
-// local 대역 — Supabase 키가 없을 때 python webapi.py 에 붙는다. 제출본 아님.
+// local 대역 — Supabase 키가 없을 때 node server/webapi.ts 에 붙는다. 제출본 아님.
 // web/.env 에 Supabase 키가 들어가면 쓰이지 않는다. 키 없는 환경용으로 남겨 둔다 (할일 D5-9).
-import { AdminDenied } from "./admin";
 import type { Backend, DeletedItem } from "./data";
 
-/** HTTP 헤더 값은 영문·숫자·기호(ISO-8859-1)만 된다. 한글 등이 섞인 코드는 헤더에 못 싣는다. */
-const headerSafe = (s: string) => /^[\x20-\x7e]+$/.test(s);
-
-/** code 가 있으면 운영자 코드를 싣는다 (관리자 RPC 전용, D5-31).
- *  영문·숫자 코드는 X-Admin-Code 헤더로, 한글 등이 섞인 코드는 본문 p_code 로 보낸다 (서버는 둘 다 받는다 — 헤더에 한글을 넣으면 요청 자체가 만들어지지 않는다). */
-async function call<T>(path: string, body?: unknown, code?: string): Promise<T> {
+async function call<T>(path: string, body?: unknown): Promise<T> {
   let res: Response;
-  const viaHeader = !!code && headerSafe(code);
-  const payload = code && !viaHeader ? { ...(body as object), p_code: code } : body;
   try {
     res = await fetch(path, body === undefined ? undefined : {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(viaHeader ? { "X-Admin-Code": code! } : {}) },
-      body: JSON.stringify(payload),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     });
   } catch {
     // 방문객 화면에도 그대로 보일 수 있는 문구 (개발 용어 없이). name 으로 '연결 실패'를 구분한다 (report.ts · isNetworkError)
@@ -25,10 +17,6 @@ async function call<T>(path: string, body?: unknown, code?: string): Promise<T> 
     throw e;
   }
   const json = await res.json().catch(() => ({}));
-  // 서버의 운영자 코드 검사: 401 코드 없음·틀림 · 403 서버에 코드 미설정 · 429 틀린 시도가 많아 잠김
-  if (res.status === 401) throw new AdminDenied("wrong", json.error ?? "운영자 코드가 필요합니다");
-  if (res.status === 403) throw new AdminDenied("unset", json.error ?? "운영자 코드가 설정되지 않았습니다");
-  if (res.status === 429) throw new AdminDenied("locked", json.error ?? "시도가 너무 많습니다");
   // 프록시(vite · nginx 등) 뒤에서 webapi 가 죽으면 연결 거부가 아니라 502·503·504 나 본문 없는 500 으로 돌아온다.
   // webapi 자신의 오류는 항상 {error: ...} JSON 이라서, 그 모양이 아닌 5xx 는 '서버에 닿지 못함'으로 본다.
   if (res.status >= 500 && typeof json.error !== "string") {
@@ -49,25 +37,23 @@ export function localBackend(): Backend {
     action: () => call("/api/action"),
     submitFeedback: (zoneId, text) =>
       call("/api/rpc/submit_feedback", { p_zone_id: zoneId, p_text: text }),
-    // 관리자 동작 — 코드를 헤더로 싣는다 (묻는 것은 admin.ts 의 gateAdmin)
-    checkAdmin: async (code) => { await call("/api/rpc/check_admin", {}, code); },
-    requestDoc: (label, code) => call("/api/rpc/request_doc", { p_label: label }, code),
-    setActionStatus: (id, status, code) =>
-      call("/api/rpc/set_action_status", { p_id: id, p_status: status }, code),
-    deleteFeedback: (id, code) => call("/api/rpc/delete_feedback", { p_id: id }, code),
-    restoreFeedback: (id, code) => call("/api/rpc/restore_feedback", { p_id: id }, code),
+    requestDoc: (label) => call("/api/rpc/request_doc", { p_label: label }),
+    setActionStatus: (id, status) =>
+      call("/api/rpc/set_action_status", { p_id: id, p_status: status }),
+    deleteFeedback: (id) => call("/api/rpc/delete_feedback", { p_id: id }),
+    restoreFeedback: (id) => call("/api/rpc/restore_feedback", { p_id: id }),
     freshness: () => call("/api/freshness"),
     getSettings: () => call("/api/settings"),
-    saveFestival: async (f, code) => { await call("/api/rpc/save_festival", { p_name: f.name, p_region: f.region, p_start_date: f.start_date, p_end_date: f.end_date }, code); },
-    addZone: (name, code) => call("/api/rpc/add_zone", { p_name: name }, code),
-    renameZone: async (id, name, code) => { await call("/api/rpc/rename_zone", { p_id: id, p_name: name }, code); },
-    setZoneHidden: async (id, hidden, code) => { await call("/api/rpc/set_zone_hidden", { p_id: id, p_hidden: hidden ? 1 : 0 }, code); },
-    saveDepartment: async (label, department, contact, code) => { await call("/api/rpc/save_department", { p_label: label, p_department: department, p_contact: contact }, code); },
+    saveFestival: async (f) => { await call("/api/rpc/save_festival", { p_name: f.name, p_region: f.region, p_start_date: f.start_date, p_end_date: f.end_date }); },
+    addZone: (name) => call("/api/rpc/add_zone", { p_name: name }),
+    renameZone: async (id, name) => { await call("/api/rpc/rename_zone", { p_id: id, p_name: name }); },
+    setZoneHidden: async (id, hidden) => { await call("/api/rpc/set_zone_hidden", { p_id: id, p_hidden: hidden ? 1 : 0 }); },
+    saveDepartment: async (label, department, contact) => { await call("/api/rpc/save_department", { p_label: label, p_department: department, p_contact: contact }); },
     devFeed: (since) => call("/api/rpc/dev_feed", { p_since_log: since.log, p_since_cls: since.cls }),
-    listDeleted: async (code) => (await call<{ items: DeletedItem[] }>("/api/rpc/list_deleted", {}, code)).items ?? [],
-    resolveReview: (id, label, code) => call("/api/rpc/resolve_review", { p_id: id, p_label: label }, code),
-    dismissReview: (id, code) => call("/api/rpc/dismiss_review", { p_id: id }, code),
-    reopenReview: (id, code) => call("/api/rpc/reopen_review", { p_id: id }, code),
+    listDeleted: async () => (await call<{ items: DeletedItem[] }>("/api/rpc/list_deleted", {})).items ?? [],
+    resolveReview: (id, label) => call("/api/rpc/resolve_review", { p_id: id, p_label: label }),
+    dismissReview: (id) => call("/api/rpc/dismiss_review", { p_id: id }),
+    reopenReview: (id) => call("/api/rpc/reopen_review", { p_id: id }),
 
     subscribe(h) {
       // EventSource 는 끊기면 보통 알아서 다시 붙는다. 그런데 서버가 죽어 연결이 아예 닫힌(CLOSED) 채로 남는 브라우저가 있어,

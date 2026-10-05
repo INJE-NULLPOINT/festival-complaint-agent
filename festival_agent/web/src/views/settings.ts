@@ -1,9 +1,8 @@
-// 설정 (D5-90) — 축제 정보 · 구역 · 담당 부서. 보기만 할 때는 운영자 코드가 필요 없고, 저장할 때 코드 창이 뜬다(api 가 gateAdmin 으로 감싸져 있다).
+// 설정 (D5-90) — 축제 정보 · 구역 · 담당 부서. 저장하면 바로 반영된다.
 //   · 축제 이름을 저장하면 사이드바·헤더의 이름이 바로 바뀐다 ('festival-changed' 이벤트 → main.ts).
 //   · 구역은 지우지 않고 숨긴다 (민원이 있는 구역도). 숨긴 구역은 방문객 구역 선택에서 빠진다 — 서버가 /api/zones 에서 거른다.
 //   · 담당 부서의 연락처가 기본 예시 번호(055-000-NNNN)인 동안은 '(예시 번호)'로 표시한다.
 import "./settings.css";
-import { AdminCancelled, AdminDenied } from "../admin";
 import { api, type Settings } from "../data";
 import { esc } from "../ui";
 import { isExampleNumber } from "./contact";
@@ -56,13 +55,12 @@ export async function renderSettings(root: HTMLElement): Promise<void> {
   const msg = root.querySelector<HTMLElement>("#set-msg")!;
   const say = (t: string, bad = false) => { msg.textContent = t; msg.classList.toggle("err", bad); };
 
-  /** 저장 한 번: 코드 창은 api 가 띄운다. 취소·거부는 조용히 알리고, 서버가 준 오류 문구는 그대로 보여 준다. */
+  /** 저장 한 번. 서버가 준 오류 문구는 그대로 보여 준다. */
   async function save(run: () => Promise<unknown>, done: string, festival = false): Promise<void> {
     try {
       await run();
     } catch (e) {
-      if (e instanceof AdminCancelled) { say("저장을 취소했습니다"); return; }
-      say(e instanceof AdminDenied ? e.message : (e as Error).message || "저장하지 못했습니다", true);
+      say((e as Error).message || "저장하지 못했습니다", true);
       return;
     }
     if (festival) window.dispatchEvent(new Event("festival-changed"));

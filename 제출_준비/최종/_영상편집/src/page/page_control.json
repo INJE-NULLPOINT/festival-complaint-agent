@@ -1,0 +1,133 @@
+{
+ "file": "page_control.png",
+ "note": "좌표는 CSS px (PNG 는 가로세로 2배). origin 은 PNG 왼쪽 위가 페이지의 어디인지",
+ "cssWidth": 1920,
+ "cssHeight": 2582,
+ "scale": 2,
+ "origin": {
+  "x": 0,
+  "y": 0
+ },
+ "zones": [
+  {
+   "name": "요약 숫자 4칸",
+   "selector": ".kpis",
+   "x": 532,
+   "y": 127,
+   "w": 1088,
+   "h": 117
+  },
+  {
+   "name": "접수 누적",
+   "selector": ".kpis .kpi:nth-of-type(1)",
+   "x": 532,
+   "y": 127,
+   "w": 263,
+   "h": 117
+  },
+  {
+   "name": "조치할 일",
+   "selector": ".kpis .kpi:nth-of-type(2)",
+   "x": 807,
+   "y": 127,
+   "w": 263,
+   "h": 117
+  },
+  {
+   "name": "확인 필요",
+   "selector": ".kpis .kpi:nth-of-type(3)",
+   "x": 1082,
+   "y": 127,
+   "w": 263,
+   "h": 117
+  },
+  {
+   "name": "확인 안 한 알림",
+   "selector": ".kpis .kpi:nth-of-type(4)",
+   "x": 1357,
+   "y": 127,
+   "w": 263,
+   "h": 117
+  },
+  {
+   "name": "지금 조치할 일 (브리핑)",
+   "selector": ".card.brief",
+   "x": 532,
+   "y": 260,
+   "w": 1088,
+   "h": 299
+  },
+  {
+   "name": "1번 카드 · 유등터널 안에 인파가 몰려 떠밀리는 상황",
+   "selector": ".icards .icard:nth-of-type(1)",
+   "x": 532,
+   "y": 576,
+   "w": 1088,
+   "h": 598
+  },
+  {
+   "name": "2번 카드 · 진주교 아래 산책로 조명이 꺼져 어두움",
+   "selector": ".icards .icard:nth-of-type(2)",
+   "x": 532,
+   "y": 1185,
+   "w": 1088,
+   "h": 88
+  },
+  {
+   "name": "3번 카드 · 주차장 만차 후 진입·출차 정체",
+   "selector": ".icards .icard:nth-of-type(3)",
+   "x": 532,
+   "y": 1285,
+   "w": 1088,
+   "h": 88
+  },
+  {
+   "name": "4번 카드 · 먹거리장터 — 가격/바가지 민원",
+   "selector": ".icards .icard:nth-of-type(4)",
+   "x": 532,
+   "y": 1385,
+   "w": 1088,
+   "h": 87
+  },
+  {
+   "name": "5번 카드 · 임시 화장실 비품 부족과 위생 불량",
+   "selector": ".icards .icard:nth-of-type(5)",
+   "x": 532,
+   "y": 1484,
+   "w": 1088,
+   "h": 87
+  },
+  {
+   "name": "그 밖 1건",
+   "selector": "details.igrp:nth-of-type(1)",
+   "x": 532,
+   "y": 1588,
+   "w": 1088,
+   "h": 62
+  },
+  {
+   "name": "6번 카드 · 셔틀버스 배차 지연으로 승강장 대기 길어짐",
+   "selector": ".icards .icard:nth-of-type(6)",
+   "x": 553,
+   "y": 1651,
+   "w": 1046,
+   "h": 87
+  },
+  {
+   "name": "유형별 순위",
+   "selector": "details.typerank",
+   "x": 532,
+   "y": 1666,
+   "w": 562,
+   "h": 62
+  },
+  {
+   "name": "실시간 유입",
+   "selector": "#app section.card:has(.feed)",
+   "x": 1110,
+   "y": 1666,
+   "w": 510,
+   "h": 877
+  }
+ ]
+}

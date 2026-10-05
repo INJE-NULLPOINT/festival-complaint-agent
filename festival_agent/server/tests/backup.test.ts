@@ -18,11 +18,11 @@ async function dump(db: any, dbbackup: any): Promise<any> {
   return { format: dbbackup.FORMAT, version: dbbackup.VERSION, source: "test", created_at: "2026-10-01T00:00:00", tables };
 }
 
-test("test_백업_대상에_운영자_코드_표는_없다", async (t) => {
+test("test_백업_대상에_출처_해시_키_표는_없다", async (t) => {
   const m = await need(t, "core/dbbackup.ts"); if (!m) return;
   const [b] = m;
   for (const x of b.EXCLUDED_TABLES) assert.ok(!b.BACKUP_TABLES.includes(x), x);
-  assert.ok(b.EXCLUDED_TABLES.includes("operator_secret"));
+  assert.ok(b.EXCLUDED_TABLES.includes("source_key"));
   for (const x of ["feedback", "classification", "severity", "alert", "action_request", "briefing", "issue", "zone", "festival", "department_map"]) {
     assert.ok(b.BACKUP_TABLES.includes(x), x);
   }
@@ -74,7 +74,7 @@ test("test_백업_파일_검사와_최근_N개만_남기기", async (t) => {
   const bad = join(dir, "bad.json");
   writeFileSync(bad, JSON.stringify({ format: "other", version: 1, tables: {} }));
   assert.throws(() => b.read_backup(bad), /백업 파일이 아닙니다/);
-  writeFileSync(bad, JSON.stringify({ format: b.FORMAT, version: b.VERSION, tables: { operator_secret: { columns: ["id"], rows: [[1]] } } }));
+  writeFileSync(bad, JSON.stringify({ format: b.FORMAT, version: b.VERSION, tables: { source_key: { columns: ["id"], rows: [[1]] } } }));
   assert.throws(() => b.read_backup(bad), /백업 대상이 아닌 테이블/);
 
   const empty = { format: b.FORMAT, version: b.VERSION, source: "test", created_at: "x", tables: {} };

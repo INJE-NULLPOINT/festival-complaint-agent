@@ -398,11 +398,10 @@ async function run_prefetch(label: string, grade: string, cnt: number, basis: st
   return `${pre.department} 조치요청서 생성 (인용 ${done.quotes_used}건) — ${done.path}`;
 }
 
-/** 특정 유형에 대해 조치요청서를 만든다. 건수는 심각도를 판정한 창과 같은 구간에서 센다. */
-export async function run_for(label: string, _score: number, grade: string, formula = "",
-                              window_min: number = config.DEFAULT_WINDOW_MIN): Promise<string> {
+/** 특정 유형에 대해 조치요청서를 만든다. 건수는 심각도를 판정한 것과 같은 처리 안 된 민원에서 센다. */
+export async function run_for(label: string, _score: number, grade: string, formula = ""): Promise<string> {
   const korean = config.LABELS[label] ?? label;
-  const cnt = (await db.label_counts(window_min))[label] ?? 0;
+  const cnt = (await db.label_counts(true))[label] ?? 0;
   const conn = await db.connect();
   const fest = (await conn.execute("SELECT name FROM festival LIMIT 1")).fetchone();
   // 건수·축제명은 모델이 도구로 알아낼 수 없다. 요청문에 직접 넣어야 generate_doc 의 count 를 채운다.
@@ -416,7 +415,7 @@ export async function run_for(label: string, _score: number, grade: string, form
   return dispatcher.run(
     `'${korean}'(${label}) 유형의 심각도 등급은 ${config.GRADE_KO[grade] ?? grade}이다. ` +
     `판정 근거: ${basis}\n` +
-    `같은 구간(최근 ${window_min}분)의 접수 건수는 ${cnt}건이다. ` +
+    `처리 안 된 접수 건수는 ${cnt}건이다. ` +
     `축제: ${fest_name || "미상"}\n` +
     `담당 부서용 조치요청서를 만들어줘.${card_line}`,
     { label, grade, basis, count: cnt, festival_keyword: (fest ? fest.name : "").slice(0, 4), card_actions },

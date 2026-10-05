@@ -3,7 +3,6 @@
 // 백엔드 선택은 LLM 백엔드와 같은 방식이다.
 //   web/.env 에 VITE_SUPABASE_URL · VITE_SUPABASE_ANON_KEY 가 있으면  supabase
 //   없으면                                                          local 대역 (node server/webapi.ts)
-import { gateAdmin } from "./admin";
 import { localBackend } from "./data-local";
 import { supabaseBackend } from "./data-supabase";
 
@@ -35,7 +34,7 @@ export type Quote = { id: number; text: string; posted_at: string };
 export type IssueAction = { text: string; quote_id: number | null; source: string };
 export type Issue = {
   id: number; issue_key: string; rank_no: number;
-  grp: string;                    // main(본 목록) | more(그 밖) | in_progress(조치 중) | done(조치 완료)
+  grp: string;                    // main(본 목록) | more(그 밖) | in_progress(조치 중)
   label: string; zone_id: number | null; zone_name: string | null;   // zone null = 구역 미상
   grade: string; is_safety: number;
   type_score: number; conc: number; rec: number; card_score: number; formula: string;
@@ -82,7 +81,7 @@ export type DeletedItem = {
   id: number; raw_text: string; zone: string; zone_id: number | null;
   posted_at: string; deleted_at: string; label: string | null; status: string | null;
 };
-/** 'AI 동작 보기'(D5-62) — 내부 AI 가 도는 모습. 점수·계산식은 이 응답에만 들어 있다 (운영자 코드는 필요 없다). */
+/** 'AI 동작 보기'(D5-62) — 내부 AI 가 도는 모습. 점수·계산식은 이 응답에만 들어 있다. */
 export type DevLog = { id: number; created_at: string; agent: string; action: string; input_summary: string | null; output_summary: string | null;
   reasoning: string | null; latency_ms: number | null; tokens_in: number | null; tokens_out: number | null };
 export type DevClassification = { feedback_id: number; raw_text: string; label: string | null; status: string | null; is_safety: number | null;
@@ -121,47 +120,41 @@ export interface Backend {
   action(): Promise<ActionData>;
   /** 접수번호를 돌려준다 */
   submitFeedback(zoneId: number, text: string): Promise<number>;
-  // ── 관리자 동작 (D5-31) — 운영자 코드가 맞을 때만 서버가 실행한다.
-  // 화면은 code 를 넘기지 않고 그대로 부른다. `api` 가 gateAdmin(admin.ts)으로 감싸져 있어 처음 누를 때 코드를 묻고,
-  // 이 계층(data-local · data-supabase)은 마지막 인자 code 를 헤더(X-Admin-Code) / RPC 인자(p_code)로 서버에 싣는다.
-  // 거부되면 AdminDenied(wrong 401 · unset 403 · locked 429)를 던진다.
-  /** 코드가 맞는지만 확인 (입력 창용). 틀리면 AdminDenied. */
-  checkAdmin(code: string): Promise<void>;
-  requestDoc(label: string, code?: string): Promise<number>;
-  setActionStatus(id: number, status: string, code?: string): Promise<void>;
+  // ── 관리자 동작 (D5-31) — 코드 없이 바로 실행된다. 방문객 화면(?v=qr)에는 이 동작을 부르는 화면이 없다.
+  requestDoc(label: string): Promise<number>;
+  setActionStatus(id: number, status: string): Promise<void>;
   /** 관제에서 민원을 지운다(숨김). 되돌릴 수 있다 (D5-30) */
-  deleteFeedback(id: number, code?: string): Promise<void>;
-  restoreFeedback(id: number, code?: string): Promise<void>;
+  deleteFeedback(id: number): Promise<void>;
+  restoreFeedback(id: number): Promise<void>;
   /** 최근에 지운 민원 최대 50건 (최신순) — 토스트가 지나간 뒤에도 되돌릴 수 있게 (D5-42). 복구는 restoreFeedback. */
-  listDeleted(code?: string): Promise<DeletedItem[]>;
-  /** 'AI 동작 보기' 데이터 (D5-62). since_* 보다 새로운 로그만 온다. 심사위원이 보는 화면이라 운영자 코드가 필요 없다. */
+  listDeleted(): Promise<DeletedItem[]>;
+  /** 'AI 동작 보기' 데이터 (D5-62). since_* 보다 새로운 로그만 온다. 심사위원이 보는 화면이다. */
   devFeed(since: { log: number; cls: number }): Promise<DevFeed>;
-  /** 마지막 갱신 시각 — 에이전트 멈춤 표시용. 운영자 코드가 필요 없다 (D5-86) */
+  /** 마지막 갱신 시각 — 에이전트 멈춤 표시용. (D5-86) */
   freshness(): Promise<Freshness>;
-  // ── 설정 (D5-90) — 읽기는 코드가 필요 없고, 저장은 운영자 코드가 필요하다
+  // ── 설정 (D5-90) — 읽기·저장 모두 바로
   getSettings(): Promise<Settings>;
-  saveFestival(f: FestivalInfo, code?: string): Promise<void>;
+  saveFestival(f: FestivalInfo): Promise<void>;
   /** 새 구역 id 를 돌려준다 */
-  addZone(name: string, code?: string): Promise<number>;
-  renameZone(id: number, name: string, code?: string): Promise<void>;
+  addZone(name: string): Promise<number>;
+  renameZone(id: number, name: string): Promise<void>;
   /** 민원이 있는 구역도 지우지 않고 숨기기만 한다. 방문객 구역 선택에서 빠진다 */
-  setZoneHidden(id: number, hidden: boolean, code?: string): Promise<void>;
-  saveDepartment(label: string, department: string, contact: string, code?: string): Promise<void>;
-  // ── 확인 필요 처리 (D5-32) — 모두 운영자 코드가 필요하다
+  setZoneHidden(id: number, hidden: boolean): Promise<void>;
+  saveDepartment(label: string, department: string, contact: string): Promise<void>;
+  // ── 확인 필요 처리 (D5-32)
   /** 유형 지정 (status='review' 일 때만). 안전·혼잡을 고르면 안전 의심으로 자동 처리된다 */
-  resolveReview(id: number, label: string, code?: string): Promise<void>;
+  resolveReview(id: number, label: string): Promise<void>;
   /** 유형 없음으로 닫기 (진짜 의견이지만 유형을 붙일 수 없는 것) */
-  dismissReview(id: number, code?: string): Promise<void>;
+  dismissReview(id: number): Promise<void>;
   /** 닫은 것 · 지정한 것을 다시 확인 필요로 (되돌리기) */
-  reopenReview(id: number, code?: string): Promise<void>;
+  reopenReview(id: number): Promise<void>;
   subscribe(h: Handlers): void;
 }
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-// 관리자 동작에는 문을 건다 (처음 누를 때 운영자 코드 입력). 읽기·접수(submit_feedback)는 그대로 지나간다.
-export const api: Backend = gateAdmin(url && key ? supabaseBackend(url, key) : localBackend());
+export const api: Backend = url && key ? supabaseBackend(url, key) : localBackend();
 
 // 헤더 배지 (D5-33): 관제 데이터를 읽을 때마다 그 안의 backend_llm · synthetic 만 헤더에 알린다 (control.ts 는 건드리지 않는다).
 export type HeaderMeta = Pick<ControlData, "backend_llm" | "synthetic" | "crowding">;

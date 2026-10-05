@@ -1,0 +1,578 @@
+[
+ {
+  "id": 1,
+  "time": "2026-10-06T01:52:42",
+  "agent": "classifier",
+  "action": "cache_hit",
+  "tool": "cache_hit",
+  "ms": 0
+ },
+ {
+  "id": 2,
+  "time": "2026-10-06T01:52:49",
+  "agent": "classifier",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 6579
+ },
+ {
+  "id": 3,
+  "time": "2026-10-06T01:52:49",
+  "agent": "classifier",
+  "action": "save_classification",
+  "tool": "save_classification",
+  "ms": 1
+ },
+ {
+  "id": 4,
+  "time": "2026-10-06T01:52:57",
+  "agent": "planner",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 7615
+ },
+ {
+  "id": 5,
+  "time": "2026-10-06T01:52:57",
+  "agent": "planner",
+  "action": "plan",
+  "tool": "plan",
+  "ms": 0
+ },
+ {
+  "id": 6,
+  "time": "2026-10-06T01:52:57",
+  "agent": "planner",
+  "action": "plan_cycle",
+  "tool": "plan_cycle",
+  "ms": 1
+ },
+ {
+  "id": 7,
+  "time": "2026-10-06T01:53:02",
+  "agent": "monitor",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 5121
+ },
+ {
+  "id": 8,
+  "time": "2026-10-06T01:53:02",
+  "agent": "monitor",
+  "action": "get_window_stats",
+  "tool": "get_window_stats",
+  "ms": 1
+ },
+ {
+  "id": 9,
+  "time": "2026-10-06T01:53:07",
+  "agent": "monitor",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 5819
+ },
+ {
+  "id": 10,
+  "time": "2026-10-06T01:53:07",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 2
+ },
+ {
+  "id": 11,
+  "time": "2026-10-06T01:53:07",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 0
+ },
+ {
+  "id": 12,
+  "time": "2026-10-06T01:53:07",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 0
+ },
+ {
+  "id": 13,
+  "time": "2026-10-06T01:53:07",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 1
+ },
+ {
+  "id": 14,
+  "time": "2026-10-06T01:53:07",
+  "agent": "monitor",
+  "action": "save_snapshot",
+  "tool": "save_snapshot",
+  "ms": 1
+ },
+ {
+  "id": 15,
+  "time": "2026-10-06T01:53:16",
+  "agent": "monitor",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 8517
+ },
+ {
+  "id": 16,
+  "time": "2026-10-06T01:53:21",
+  "agent": "supervisor",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 5407
+ },
+ {
+  "id": 17,
+  "time": "2026-10-06T01:53:21",
+  "agent": "supervisor",
+  "action": "read_agent_results",
+  "tool": "read_agent_results",
+  "ms": 1
+ },
+ {
+  "id": 18,
+  "time": "2026-10-06T01:53:21",
+  "agent": "supervisor",
+  "action": "rank_actions",
+  "tool": "rank_actions",
+  "ms": 1
+ },
+ {
+  "id": 19,
+  "time": "2026-10-06T01:53:21",
+  "agent": "supervisor",
+  "action": "rank_issues",
+  "tool": "rank_issues",
+  "ms": 2
+ },
+ {
+  "id": 20,
+  "time": "2026-10-06T01:53:47",
+  "agent": "supervisor",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 25537
+ },
+ {
+  "id": 21,
+  "time": "2026-10-06T01:53:47",
+  "agent": "supervisor",
+  "action": "write_briefing",
+  "tool": "write_briefing",
+  "ms": 9
+ },
+ {
+  "id": 22,
+  "time": "2026-10-06T01:54:39",
+  "agent": "classifier",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 6536
+ },
+ {
+  "id": 23,
+  "time": "2026-10-06T01:54:39",
+  "agent": "classifier",
+  "action": "save_classification",
+  "tool": "save_classification",
+  "ms": 0
+ },
+ {
+  "id": 24,
+  "time": "2026-10-06T01:54:46",
+  "agent": "planner",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 6457
+ },
+ {
+  "id": 25,
+  "time": "2026-10-06T01:54:46",
+  "agent": "planner",
+  "action": "plan",
+  "tool": "plan",
+  "ms": 0
+ },
+ {
+  "id": 26,
+  "time": "2026-10-06T01:54:46",
+  "agent": "planner",
+  "action": "plan_cycle",
+  "tool": "plan_cycle",
+  "ms": 0
+ },
+ {
+  "id": 27,
+  "time": "2026-10-06T01:54:48",
+  "agent": "classifier",
+  "action": "cache_hit",
+  "tool": "cache_hit",
+  "ms": 0
+ },
+ {
+  "id": 28,
+  "time": "2026-10-06T01:54:51",
+  "agent": "monitor",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 5945
+ },
+ {
+  "id": 29,
+  "time": "2026-10-06T01:54:51",
+  "agent": "monitor",
+  "action": "get_window_stats",
+  "tool": "get_window_stats",
+  "ms": 0
+ },
+ {
+  "id": 30,
+  "time": "2026-10-06T01:54:57",
+  "agent": "classifier",
+  "action": "cache_hit",
+  "tool": "cache_hit",
+  "ms": 0
+ },
+ {
+  "id": 31,
+  "time": "2026-10-06T01:54:57",
+  "agent": "monitor",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 5867
+ },
+ {
+  "id": 32,
+  "time": "2026-10-06T01:54:57",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 1
+ },
+ {
+  "id": 33,
+  "time": "2026-10-06T01:54:57",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 0
+ },
+ {
+  "id": 34,
+  "time": "2026-10-06T01:54:57",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 1
+ },
+ {
+  "id": 35,
+  "time": "2026-10-06T01:54:57",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 0
+ },
+ {
+  "id": 36,
+  "time": "2026-10-06T01:54:57",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 1
+ },
+ {
+  "id": 37,
+  "time": "2026-10-06T01:54:57",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 1
+ },
+ {
+  "id": 38,
+  "time": "2026-10-06T01:54:57",
+  "agent": "monitor",
+  "action": "save_snapshot",
+  "tool": "save_snapshot",
+  "ms": 0
+ },
+ {
+  "id": 39,
+  "time": "2026-10-06T01:55:08",
+  "agent": "monitor",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 10748
+ },
+ {
+  "id": 40,
+  "time": "2026-10-06T01:55:08",
+  "agent": "dispatcher",
+  "action": "get_department",
+  "tool": "get_department",
+  "ms": 0
+ },
+ {
+  "id": 41,
+  "time": "2026-10-06T01:55:08",
+  "agent": "dispatcher",
+  "action": "collect_quotes",
+  "tool": "collect_quotes",
+  "ms": 0
+ },
+ {
+  "id": 42,
+  "time": "2026-10-06T01:55:08",
+  "agent": "dispatcher",
+  "action": "lookup_festival_info",
+  "tool": "lookup_festival_info",
+  "ms": 0
+ },
+ {
+  "id": 43,
+  "time": "2026-10-06T01:55:15",
+  "agent": "dispatcher",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 6790
+ },
+ {
+  "id": 44,
+  "time": "2026-10-06T01:55:15",
+  "agent": "dispatcher",
+  "action": "generate_doc",
+  "tool": "generate_doc",
+  "ms": 0
+ },
+ {
+  "id": 45,
+  "time": "2026-10-06T01:55:15",
+  "agent": "dispatcher",
+  "action": "write_request",
+  "tool": "write_request",
+  "ms": 91
+ },
+ {
+  "id": 46,
+  "time": "2026-10-06T01:55:20",
+  "agent": "supervisor",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 4994
+ },
+ {
+  "id": 47,
+  "time": "2026-10-06T01:55:20",
+  "agent": "supervisor",
+  "action": "read_agent_results",
+  "tool": "read_agent_results",
+  "ms": 1
+ },
+ {
+  "id": 48,
+  "time": "2026-10-06T01:55:20",
+  "agent": "supervisor",
+  "action": "rank_actions",
+  "tool": "rank_actions",
+  "ms": 1
+ },
+ {
+  "id": 49,
+  "time": "2026-10-06T01:55:20",
+  "agent": "supervisor",
+  "action": "rank_issues",
+  "tool": "rank_issues",
+  "ms": 3
+ },
+ {
+  "id": 50,
+  "time": "2026-10-06T01:55:41",
+  "agent": "supervisor",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 21298
+ },
+ {
+  "id": 51,
+  "time": "2026-10-06T01:55:41",
+  "agent": "supervisor",
+  "action": "write_briefing",
+  "tool": "write_briefing",
+  "ms": 7
+ },
+ {
+  "id": 52,
+  "time": "2026-10-06T01:55:52",
+  "agent": "dispatcher",
+  "action": "get_department",
+  "tool": "get_department",
+  "ms": 0
+ },
+ {
+  "id": 53,
+  "time": "2026-10-06T01:55:52",
+  "agent": "dispatcher",
+  "action": "collect_quotes",
+  "tool": "collect_quotes",
+  "ms": 0
+ },
+ {
+  "id": 54,
+  "time": "2026-10-06T01:55:52",
+  "agent": "dispatcher",
+  "action": "lookup_festival_info",
+  "tool": "lookup_festival_info",
+  "ms": 0
+ },
+ {
+  "id": 55,
+  "time": "2026-10-06T01:56:04",
+  "agent": "dispatcher",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 12012
+ },
+ {
+  "id": 56,
+  "time": "2026-10-06T01:56:04",
+  "agent": "dispatcher",
+  "action": "generate_doc",
+  "tool": "generate_doc",
+  "ms": 0
+ },
+ {
+  "id": 57,
+  "time": "2026-10-06T01:56:04",
+  "agent": "dispatcher",
+  "action": "write_request",
+  "tool": "write_request",
+  "ms": 30
+ },
+ {
+  "id": 58,
+  "time": "2026-10-06T01:56:10",
+  "agent": "planner",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 6561
+ },
+ {
+  "id": 59,
+  "time": "2026-10-06T01:56:10",
+  "agent": "planner",
+  "action": "plan",
+  "tool": "plan",
+  "ms": 0
+ },
+ {
+  "id": 60,
+  "time": "2026-10-06T01:56:10",
+  "agent": "planner",
+  "action": "plan_cycle",
+  "tool": "plan_cycle",
+  "ms": 1
+ },
+ {
+  "id": 61,
+  "time": "2026-10-06T01:56:15",
+  "agent": "monitor",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 5274
+ },
+ {
+  "id": 62,
+  "time": "2026-10-06T01:56:15",
+  "agent": "monitor",
+  "action": "get_window_stats",
+  "tool": "get_window_stats",
+  "ms": 1
+ },
+ {
+  "id": 63,
+  "time": "2026-10-06T01:56:22",
+  "agent": "monitor",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 6357
+ },
+ {
+  "id": 64,
+  "time": "2026-10-06T01:56:22",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 1
+ },
+ {
+  "id": 65,
+  "time": "2026-10-06T01:56:22",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 1
+ },
+ {
+  "id": 66,
+  "time": "2026-10-06T01:56:22",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 1
+ },
+ {
+  "id": 67,
+  "time": "2026-10-06T01:56:22",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 1
+ },
+ {
+  "id": 68,
+  "time": "2026-10-06T01:56:22",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 1
+ },
+ {
+  "id": 69,
+  "time": "2026-10-06T01:56:22",
+  "agent": "monitor",
+  "action": "score_label",
+  "tool": "score_label",
+  "ms": 0
+ },
+ {
+  "id": 70,
+  "time": "2026-10-06T01:56:22",
+  "agent": "monitor",
+  "action": "save_snapshot",
+  "tool": "save_snapshot",
+  "ms": 0
+ },
+ {
+  "id": 71,
+  "time": "2026-10-06T01:56:30",
+  "agent": "monitor",
+  "action": "cli_call",
+  "tool": "cli_call",
+  "ms": 8571
+ },
+ {
+  "id": 72,
+  "time": "2026-10-06T01:58:03",
+  "agent": "classifier",
+  "action": "cache_hit",
+  "tool": "cache_hit",
+  "ms": 0
+ }
+]

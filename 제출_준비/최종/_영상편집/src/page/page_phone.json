@@ -1,0 +1,93 @@
+{
+ "file": "page_phone.png",
+ "note": "좌표는 CSS px (PNG 는 가로세로 2배). origin 은 PNG 왼쪽 위가 페이지의 어디인지",
+ "cssWidth": 390,
+ "cssHeight": 1653,
+ "scale": 2,
+ "origin": {
+  "x": 0,
+  "y": 0
+ },
+ "zones": [
+  {
+   "name": "불편 신고",
+   "selector": ".rp > h1, .rp > .rp-lead:nth-of-type(1)",
+   "x": 12,
+   "y": 58,
+   "w": 366,
+   "h": 36
+  },
+  {
+   "name": "이름이나 연락처는 적지 않아도 됩니다.",
+   "selector": ".rp > h1, .rp > .rp-lead:nth-of-type(2)",
+   "x": 12,
+   "y": 102,
+   "w": 366,
+   "h": 26
+  },
+  {
+   "name": "생명이 위급하면 119·112에 먼저 연락해 주세요.",
+   "selector": ".rp > h1, .rp > .rp-lead:nth-of-type(3)",
+   "x": 12,
+   "y": 128,
+   "w": 366,
+   "h": 26
+  },
+  {
+   "name": "구역 선택",
+   "selector": ".rp-zone",
+   "x": 12,
+   "y": 181,
+   "w": 366,
+   "h": 85
+  },
+  {
+   "name": "민원 입력",
+   "selector": ".rp-field",
+   "x": 12,
+   "y": 294,
+   "w": 366,
+   "h": 212
+  },
+  {
+   "name": "개인정보 안내",
+   "selector": ".rp-hint",
+   "x": 12,
+   "y": 517,
+   "w": 366,
+   "h": 45
+  },
+  {
+   "name": "이런 것을 알려 주세요",
+   "selector": ".rp-ex",
+   "x": 12,
+   "y": 601,
+   "w": 366,
+   "h": 464
+  },
+  {
+   "name": "자주 묻는 질문",
+   "selector": ".rp-faq",
+   "x": 12,
+   "y": 1106,
+   "w": 366,
+   "h": 350
+  },
+  {
+   "name": "맺음말",
+   "selector": ".rp-foot",
+   "x": 12,
+   "y": 1488,
+   "w": 366,
+   "h": 45
+  },
+  {
+   "name": "접수하기 버튼",
+   "selector": ".rp-bar",
+   "x": 0,
+   "y": 1571,
+   "w": 390,
+   "h": 82
+  }
+ ]
+}

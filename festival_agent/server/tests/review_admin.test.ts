@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  need, withTempDb, seed, run, all, one, cards, reviewRow, cls, withAdminCode, withEnv, withConfig, rejects,
+  need, withTempDb, seed, run, all, one, cards, reviewRow, cls, withEnv, withConfig, rejects,
   sha256hex, iso, ago, nowSec, ROOT, SERVER, tryImport,
 } from "./_helpers.ts";
 
@@ -115,27 +115,6 @@ test("test_확인필요_방치된_안전의심은_알림_한번", async (t) => {
   });
 });
 
-test("test_확인필요_처리_RPC도_운영자코드가_필요하다", async (t) => {
-  const m = await need(t, "core/admin.ts", "webapi.ts", "agents/classifier.ts"); if (!m) return;
-  const [admin, webapi] = m;
-  await withTempDb(async (db) => withAdminCode("tmp-operator-code", async () => {
-    const fid = await reviewRow(db, "뭔가 위험한 느낌이에요", { safety: true, suggested: "safety" });
-    for (const [name, args] of [["resolve_review", { p_id: fid, p_label: "safety" }], ["dismiss_review", { p_id: fid }], ["reopen_review", { p_id: fid }]] as const) {
-      for (const bad of [null, "wrong"]) {
-        await rejects(() => webapi.call_rpc(name, args, bad), (e) => { assert.ok(e instanceof admin.AdminError); assert.equal(e.status, 401); });
-      }
-    }
-    assert.equal((await cls(db, fid)).status, "review");
-    await run(db, "DELETE FROM admin_attempt");
-    await webapi.call_rpc("resolve_review", { p_id: fid, p_label: "safety" }, "tmp-operator-code");
-    assert.equal((await cls(db, fid)).status, "done");
-    await webapi.call_rpc("reopen_review", { p_id: fid, p_code: "tmp-operator-code" });
-    assert.equal((await cls(db, fid)).status, "review");
-    await webapi.call_rpc("dismiss_review", { p_id: fid }, "tmp-operator-code");
-    assert.equal((await cls(db, fid)).status, "dismissed");
-  }));
-});
-
 test("test_관제_헤더용_필드_backend_llm_synthetic", async (t) => {
   if (!(await need(t, "webapi.ts"))) return;
   const webapi = await tryImport("webapi.ts");
@@ -147,7 +126,7 @@ test("test_관제_헤더용_필드_backend_llm_synthetic", async (t) => {
     await withEnv("LLM_BACKEND", "local", async () => assert.equal((await webapi.get_control()).backend_llm, "local"));
     const now = nowSec();
     for (const [src, m_, text] of [["demo", 5, "시연 배경 민원 하나입니다"], ["replay", 10, "재생된 민원 하나입니다"],
-                                   ["dev", 15, "개발 시드 민원 하나입니다"], ["replay", 600, "창 밖으로 벗어난 재생 민원입니다"]] as const) {
+                                   ["dev", 15, "개발 시드 민원 하나입니다"]] as const) {
       const fid = await db.insert_feedback(1, text, src, iso(ago(now, m_)));
       await run(db, "UPDATE classification SET label='guide', sentiment=-0.3, is_safety=0, confidence=0.9, status='done' WHERE feedback_id=?", [fid]);
     }
@@ -262,188 +241,6 @@ test("test_지운_민원_목록_최신순_되돌리면_빠진다", async (t) => 
   });
 });
 
-test("test_운영자코드_없음_틀림_5회잠김_맞음", async (t) => {
-  const m = await need(t, "core/admin.ts"); if (!m) return;
-  const [admin] = m;
-  await withTempDb(async (db) => withAdminCode("tmp-operator-code", async () => {
-    const status = async (code: any) => {
-      try { await admin.verify(code); } catch (e: any) { if (e instanceof admin.AdminError) return e.status; throw e; }
-      return 200;
-    };
-    assert.ok((await status(null)) === 401 && (await status("")) === 401);
-    assert.equal((await one(db, "SELECT COUNT(*) c FROM admin_attempt")).c, 0);
-    assert.equal(await status("wrong"), 401);
-    assert.equal(await status("tmp-operator-code"), 200);
-    assert.equal(await admin.recent_failures(), 0);
-    for (let i = 0; i < 5; i++) assert.equal(await status("wrong"), 401);
-    assert.equal(await admin.recent_failures(), 5);
-    assert.equal(await status("wrong"), 429);
-    assert.equal(await status("tmp-operator-code"), 429);
-    assert.equal(await status(null), 429);
-    assert.equal(await admin.recent_failures(), 5);
-    await run(db, "UPDATE admin_attempt SET at='2000-01-01T00:00:00'");
-    assert.equal(await status("tmp-operator-code"), 200);
-    assert.equal(await admin.recent_failures(), 0);
-  }));
-});
-
-/** 테스트용 webapi HTTP 서버 — Python webapi.ExclusiveServer(("127.0.0.1", 0), Handler). TS 쪽 이름은 [서버]·[화면]과 맞춘다. */
-async function startServer(webapi: any): Promise<{ port: number; close: () => Promise<void> }> {
-  const srv = webapi.create_server ? await webapi.create_server() : webapi.ExclusiveServer ? new webapi.ExclusiveServer() : null;
-  if (!srv) throw new Error("webapi 에 create_server() 가 없다 — [화면] 이름 확인");
-  await new Promise<void>((res) => srv.listen(0, "127.0.0.1", () => res()));
-  return { port: (srv.address() as any).port, close: () => new Promise<void>((res) => srv.close(() => res())) };
-}
-
-async function post(port: number, name: string, body: any = {}, headers: Record<string, string> = {}) {
-  const r = await fetch(`http://127.0.0.1:${port}/api/rpc/${encodeURIComponent(name)}`, {
-    method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json", ...headers },
-  });
-  let data: any = null;
-  try { data = await r.json(); } catch { /* 본문 없음 */ }
-  return [r.status, data] as const;
-}
-
-test("test_운영자코드_잠금은_출처별_다른_출처_운영자는_통과", async (t) => {
-  const m = await need(t, "core/admin.ts", "core/source_id.ts", "webapi.ts"); if (!m) return;
-  const [admin, source_id, webapi] = m;
-  const a = await source_id.source_hash("203.0.113.7"), b = await source_id.source_hash("198.51.100.9");
-  assert.ok(a && b && a !== b && a.length === 16 && !a.includes("203.0.113.7"));
-  assert.equal(await source_id.source_hash("203.0.113.7"), a);
-  assert.ok((await source_id.source_hash(null)) === "" && (await source_id.client_ip("203.0.113.7", "1.2.3.4")) === "203.0.113.7");
-  assert.equal(await source_id.client_ip("127.0.0.1", "10.0.0.1"), "10.0.0.1");
-  assert.equal(await source_id.client_ip("127.0.0.1", "1.2.3.4, 10.0.0.1"), "10.0.0.1");
-  assert.equal(await source_id.client_ip("::1", "9.9.9.9, 10.0.0.2"), "10.0.0.2");
-  assert.equal(await source_id.client_ip("203.0.113.7", "1.2.3.4"), "203.0.113.7");
-  assert.ok((await source_id.client_ip("127.0.0.1", null)) === "127.0.0.1" && (await source_id.client_ip("127.0.0.1", " ")) === "127.0.0.1");
-  assert.equal(await source_id.client_source("127.0.0.1", "1.1.1.1, 198.51.100.9"), await source_id.client_source("127.0.0.1", "2.2.2.2, 198.51.100.9"));
-  assert.equal(await source_id.client_source("203.0.113.7", "1.1.1.1"), await source_id.client_source("203.0.113.7", "2.2.2.2"));
-  await withTempDb(async (db) => withAdminCode("tmp-operator-code", async () => {
-    const status = async (code: any, src: any) => {
-      try { await admin.verify(code, src); } catch (e: any) { if (e instanceof admin.AdminError) return e.status; throw e; }
-      return 200;
-    };
-    for (let i = 0; i < 5; i++) assert.equal(await status("wrong", a), 401);
-    assert.ok((await status("wrong", a)) === 429 && (await status("tmp-operator-code", a)) === 429);
-    assert.equal(await status("tmp-operator-code", b), 200);
-    assert.ok((await admin.recent_failures(a)) === 5 && (await admin.recent_failures(b)) === 0);
-    assert.ok((await status("wrong", b)) === 401 && (await admin.recent_failures(b)) === 1);
-    assert.ok((await status("tmp-operator-code", b)) === 200 && (await admin.recent_failures(b)) === 0);
-    assert.equal(await admin.recent_failures(a), 5);
-    for (let i = 0; i < 5; i++) await status("wrong", null);
-    assert.ok((await status("tmp-operator-code", null)) === 429 && (await status("tmp-operator-code", b)) === 200);
-    const srcs = new Set((await all(db, "SELECT src FROM admin_attempt")).map((r: any) => r.src));
-    assert.ok([...srcs].every((s) => s === a || s === "") && [...srcs].every((s) => !String(s).includes(".")));
-    await run(db, "UPDATE admin_attempt SET at='2000-01-01T00:00:00'");
-    assert.equal(await status("tmp-operator-code", b), 200);
-    assert.equal((await one(db, "SELECT COUNT(*) c FROM admin_attempt")).c, 0);
-    const srv = await startServer(webapi);
-    try {
-      const p = (code: string, xff: string) => post(srv.port, "check_admin", {}, { "X-Admin-Code": code, "X-Forwarded-For": xff }).then((r) => r[0]);
-      for (let i = 0; i < 5; i++) await p("wrong", "203.0.113.7");
-      assert.equal(await p("tmp-operator-code", "203.0.113.7"), 429);
-      assert.equal(await p("tmp-operator-code", "198.51.100.9"), 200);
-      assert.equal(await p("tmp-operator-code", "9.9.9.9, 203.0.113.7"), 429);
-      assert.equal(await p("tmp-operator-code", "203.0.113.7, 198.51.100.9"), 200);
-    } finally {
-      await srv.close();
-    }
-  }));
-});
-
-test("test_운영자코드_미설정이면_관리자_동작은_전부_거부", async (t) => {
-  const m = await need(t, "core/admin.ts", "webapi.ts"); if (!m) return;
-  const [admin, webapi] = m;
-  await withTempDb(async () => withAdminCode("", async () => {
-    for (const code of [null, "", "anything", "x".repeat(40)]) {
-      await rejects(() => admin.verify(code), (e) => { assert.ok(e instanceof admin.AdminError); assert.ok(e.status === 403 && e.message.includes("운영자 코드가 필요합니다")); });
-    }
-    for (const name of [...webapi.ADMIN_RPC].sort()) {
-      await rejects(() => webapi.call_rpc(name, { p_id: 1, p_label: "safety", p_status: "done" }, "anything"),
-        (e) => { assert.ok(e instanceof admin.AdminError); assert.equal(e.status, 403, name); });
-    }
-    assert.ok((await webapi.call_rpc("submit_feedback", { p_zone_id: 1, p_text: "진입로가 너무 어두워요" })) > 0);
-  }));
-});
-
-test("test_운영자코드_관리자RPC는_코드가_맞아야_실행된다", async (t) => {
-  const m = await need(t, "core/admin.ts", "webapi.ts"); if (!m) return;
-  const [admin, webapi] = m;
-  await withTempDb(async (db) => withAdminCode("tmp-operator-code", async () => {
-    const ids = await seed(db, [[4, "safety", 3, -0.8, true, "유등터널 계단 조명이 꺼져 있어요"]]);
-    await run(db, "INSERT INTO action_request (label, department, status, created_at) VALUES ('safety', '안전총괄과', 'requested', ?)", [await db.now()]);
-    const calls: Record<string, any> = {
-      delete_feedback: { p_id: ids[0] }, restore_feedback: { p_id: ids[0] },
-      set_action_status: { p_id: 1, p_status: "in_progress" }, request_doc: { p_label: "safety" },
-      resolve_review: { p_id: ids[0], p_label: "safety" }, dismiss_review: { p_id: ids[0] }, reopen_review: { p_id: ids[0] },
-      check_admin: {}, list_deleted: {},
-      save_festival: { p_name: "축제", p_region: "진주", p_start_date: "2026-10-01", p_end_date: "2026-10-02" }, add_zone: { p_name: "시험 구역" },   // D5-90 설정 쓰기도 운영자 코드가 필요하다
-      rename_zone: { p_id: 1, p_name: "시험 이름" }, set_zone_hidden: { p_id: 1, p_hidden: false }, save_department: { p_label: "parking", p_department: "교통과", p_contact: "055-123-4567" },
-    };
-    assert.deepEqual(new Set(Object.keys(calls)), new Set(webapi.ADMIN_RPC));
-    for (const [name, args] of Object.entries(calls)) {
-      for (const bad of [null, "", "wrong-code"]) {
-        await rejects(() => webapi.call_rpc(name, args, bad), (e) => { assert.ok(e instanceof admin.AdminError); assert.equal(e.status, 401, `${name} ${bad}`); });
-      }
-      await run(db, "DELETE FROM admin_attempt");
-    }
-    assert.equal(await db.deleted_count(), 0);
-    await run(db, "DELETE FROM admin_attempt");
-    await webapi.call_rpc("delete_feedback", calls.delete_feedback, "tmp-operator-code");
-    assert.equal(await db.deleted_count(), 1);
-    const listed = await webapi.call_rpc("list_deleted", {}, "tmp-operator-code");
-    assert.ok(listed.ok === true);
-    assert.deepEqual(listed.items.map((x: any) => x.id), [ids[0]]);
-    await webapi.call_rpc("restore_feedback", { ...calls.restore_feedback, p_code: "tmp-operator-code" });
-    assert.equal(await db.deleted_count(), 0);
-    await webapi.call_rpc("set_action_status", calls.set_action_status, "tmp-operator-code");
-    assert.equal((await one(db, "SELECT status FROM action_request WHERE id=1")).status, "in_progress");
-    assert.ok((await webapi.call_rpc("request_doc", calls.request_doc, "tmp-operator-code")) > 0);
-    assert.equal(await webapi.call_rpc("check_admin", {}, "tmp-operator-code"), true);
-    for (let i = 0; i < 5; i++) { try { await webapi.call_rpc("check_admin", {}, "wrong-code"); } catch (e) { if (!(e instanceof admin.AdminError)) throw e; } }
-    try { await webapi.call_rpc("check_admin", {}, "tmp-operator-code"); } catch (e: any) { assert.equal(e.status, 429); }
-    assert.ok((await webapi.call_rpc("submit_feedback", { p_zone_id: 1, p_text: "주차장이 너무 혼잡해요" })) > 0);
-    await rejects(() => webapi.call_rpc("없는함수", {}));                         // Python: KeyError
-  }));
-});
-
-test("test_운영자코드_HTTP_상태코드와_헤더", async (t) => {
-  const m = await need(t, "webapi.ts"); if (!m) return;
-  const [webapi] = m;
-  await withTempDb(async (db) => {
-    const ids = await seed(db, [[4, "safety", 3, -0.8, true, "유등터널 계단 조명이 꺼져 있어요"]]);
-    const srv = await startServer(webapi);
-    try {
-      await withAdminCode("", async () => {
-        const [s, r] = await post(srv.port, "delete_feedback", { p_id: ids[0] }, { "X-Admin-Code": "anything" });
-        assert.ok(s === 403 && r.error.includes("운영자 코드가 필요합니다"));
-      });
-      await withAdminCode("tmp-operator-code", async () => {
-        let [s, r] = await post(srv.port, "delete_feedback", { p_id: ids[0] });
-        assert.ok(s === 401 && r.error.includes("운영자 코드가 필요합니다"));
-        [s] = await post(srv.port, "delete_feedback", { p_id: ids[0] }, { "X-Admin-Code": "wrong" });
-        assert.equal(s, 401);
-        assert.equal(await db.deleted_count(), 0);
-        [s] = await post(srv.port, "delete_feedback", { p_id: ids[0] }, { "X-Admin-Code": "tmp-operator-code" });
-        assert.ok(s === 200 && (await db.deleted_count()) === 1);
-        [s, r] = await post(srv.port, "delete_feedback", { p_id: 999999 }, { "X-Admin-Code": "tmp-operator-code" });
-        assert.ok(s === 400 && r.error.includes("없는 민원"));
-        [s] = await post(srv.port, "submit_feedback", { p_zone_id: 1, p_text: "진입로가 너무 어두워요" });
-        assert.equal(s, 200);
-        for (let i = 0; i < 5; i++) await post(srv.port, "check_admin", {}, { "X-Admin-Code": "wrong" });
-        [s] = await post(srv.port, "check_admin", {}, { "X-Admin-Code": "tmp-operator-code" });
-        assert.equal(s, 429);
-        [s] = await post(srv.port, "submit_feedback", { p_zone_id: 1, p_text: "주차장이 만차예요" });
-        assert.equal(s, 200);
-        [s] = await post(srv.port, "없는함수");
-        assert.equal(s, 404);
-      });
-    } finally {
-      await srv.close();
-    }
-  });
-});
-
 test("test_도배방지_같은글_합치기_출처별_제한_구역몰림_표시", async (t) => {
   const m = await need(t, "webapi.ts", "core/intake.ts", "core/source_id.ts", "core/config.ts"); if (!m) return;
   const [webapi, intake, source_id, C] = m; const config = cfgOf(C);
@@ -509,10 +306,8 @@ test("test_도배방지_동시접수_합치기_정리", async (t) => {
     const old = iso(new Date(sn.getTime() - 25 * 3_600_000));
     await run(db, "INSERT INTO submit_rate (src, at) VALUES ('x', ?)", [old]);
     await run(db, "INSERT INTO submit_rate (src, at) VALUES ('y', ?)", [await intake._stamp(await intake.seoul_now())]);
-    await run(db, "INSERT INTO admin_attempt (at, src) VALUES (?, 'x')", [old]);
-    assert.equal(await intake.purge_old(), 2);
+    assert.equal(await intake.purge_old(), 1);
     assert.deepEqual((await all(db, "SELECT src FROM submit_rate")).map((r: any) => r.src), ["y"]);
-    assert.equal((await one(db, "SELECT COUNT(*) c FROM admin_attempt")).c, 0);
     const h = await source_id.source_hash("203.0.113.7");
     source_id._keys.clear();
     assert.notEqual(await source_id.source_hash("203.0.113.7"), h);
@@ -520,4 +315,28 @@ test("test_도배방지_동시접수_합치기_정리", async (t) => {
   const sql = readFileSync(join(ROOT, "supabase", "schema.sql"), "utf8");
   assert.ok(sql.includes("v_limit_on constant boolean := false") && !sql.includes("nokey"));
   assert.ok(sql.includes("pg_advisory_xact_lock"));
+});
+
+test("test_관리자_RPC는_코드_없이_실행되고_코드_인자는_받지_않는다", async (t) => {
+  const m = await need(t, "webapi.ts"); if (!m) return;
+  const [webapi] = m;
+  await withTempDb(async (db) => {
+    const ids = await seed(db, [[4, "safety", 3, -0.8, true, "유등터널 계단 조명이 꺼져 있어요"]]);
+    await run(db, "INSERT INTO action_request (label, department, status, created_at) VALUES ('safety', '안전총괄과', 'requested', ?)", [await db.now()]);
+    await webapi.call_rpc("delete_feedback", { p_id: ids[0] });
+    assert.equal(await db.deleted_count(), 1);
+    const listed = await webapi.call_rpc("list_deleted", {});
+    assert.ok(listed.ok === true);
+    assert.deepEqual(listed.items.map((x: any) => x.id), [ids[0]]);
+    await webapi.call_rpc("restore_feedback", { p_id: ids[0] });
+    assert.equal(await db.deleted_count(), 0);
+    await webapi.call_rpc("set_action_status", { p_id: 1, p_status: "in_progress" });
+    assert.equal((await one(db, "SELECT status FROM action_request WHERE id=1")).status, "in_progress");
+    assert.ok((await webapi.call_rpc("request_doc", { p_label: "safety" })) > 0);
+    await webapi.call_rpc("resolve_review", { p_id: ids[0], p_label: "safety" }).catch(() => null);   // 확인 필요가 아니라 '이미 처리' 오류 — 코드 때문이 아니다
+    assert.ok((await webapi.call_rpc("submit_feedback", { p_zone_id: 1, p_text: "주차장이 너무 혼잡해요" })) > 0);
+    await rejects(() => webapi.call_rpc("delete_feedback", { p_id: ids[0], p_code: "x" }), (e) => assert.ok(String(e.message).includes("unexpected keyword")));   // 코드 인자는 없다
+    assert.equal("check_admin" in webapi.RPC, false);
+    await rejects(() => webapi.call_rpc("없는함수", {}));
+  });
 });

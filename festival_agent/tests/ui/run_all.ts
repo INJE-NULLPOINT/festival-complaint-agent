@@ -14,7 +14,6 @@
 // 옵션   --only=visitor,admin   --skip=mobile   --keep(임시 폴더 남김)   --webapi-port=N   --vite-port=N   --report=경로
 // 종료 코드   0 전부 통과(건너뜀 허용) · 1 실패 있음 · 2 준비 실패
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import net from "node:net";
 import { cpus, tmpdir } from "node:os";
@@ -134,14 +133,10 @@ const ROOT = mkdtempSync(join(tmpdir(), "ui-suite-"));
 const TMP = join(ROOT, "tmp"); mkdirSync(TMP);          // 자식 스크립트의 크롬 프로필이 여기에 생긴다
 const SHOTS = join(ROOT, "shots"); mkdirSync(SHOTS);
 const DBCOPY = join(ROOT, "ui_test.db");
-// 운영자 코드(D5-31): 이 실행에서만 쓰는 무작위 값. 테스트 webapi 의 환경변수(ADMIN_CODE)로만 넣고 점검 스크립트에 UI_ADMIN_CODE 로 넘긴다.
-// 운영 .env 에는 쓰지 않으며, 보고서·로그에도 찍지 않는다.
-// UI_TEST_CODE 로 테스트 코드를 지정할 수 있다 — 한글 등 비ASCII 코드가 화면에서 되는지 볼 때 (운영자 코드가 아니라 테스트용 임의 문자열).
-const ADMIN_CODE = process.env.UI_TEST_CODE || `t${randomBytes(6).toString("hex")}`;
 // 서버는 TypeScript(server/webapi.ts) 하나다 (Python 서버는 지웠다).
 const serverBin = () => process.execPath;
 const serverArgs = (p: number): string[] => ["server/webapi.ts", "--port", String(p)];
-const childEnv: NodeJS.ProcessEnv = { ...process.env, TEMP: TMP, TMP, TMPDIR: TMP, PYTHONIOENCODING: "utf-8", UI_ADMIN_CODE: ADMIN_CODE };
+const childEnv: NodeJS.ProcessEnv = { ...process.env, TEMP: TMP, TMP, TMPDIR: TMP, PYTHONIOENCODING: "utf-8" };
 
 // 기계 부하: 다른 프로그램(게임·빌드·다른 세션의 테스트)이 CPU 를 많이 쓰면 화면이 늦게 반응해 고정 대기 시간이 모자란다.
 // 시작할 때 CPU 사용률을 1초간 재서 기다리는 시간의 배율(UI_SLOW)을 정한다. 검사 기준은 그대로고 기다리는 시간만 는다.
@@ -201,7 +196,7 @@ function runScript(key: string, label: string, file: string, args: string[], { t
 }
 
 // ══ 준비 ═════════════════════════════════════════════════════════
-let ports: { webapi?: number; vite?: number; preview?: number; lock?: number | null; moved?: boolean } = {}; let dbNote = "";
+let ports: { webapi?: number; vite?: number; preview?: number; moved?: boolean } = {}; let dbNote = "";
 try {
   if (!existsSync(VITE)) throw new Error(`vite 가 없습니다 — cd web && npm install (${VITE})`);
   const src = process.env.DB_PATH ?? join(APP, "festival.db");
@@ -211,7 +206,7 @@ try {
   dbNote = "운영 DB 복사본 + 긴 민원·URL·부서명 등 극단 입력 + 시험용 docx 추가 (make_mobile_db.ts)";
 
   const webapiPref = Number(arg("webapi-port") ?? 8799), vitePref = Number(arg("vite-port") ?? 5174);
-  const apiEnv = { ...childEnv, DB_PATH: DBCOPY, SUPABASE_DB_URL: "", SUPABASE_URL: "", SUPABASE_SERVICE_KEY: "", LLM_BACKEND: "local", ADMIN_CODE, DOCS_DIR: join(dirname(DBCOPY), "docs") };
+  const apiEnv = { ...childEnv, DB_PATH: DBCOPY, SUPABASE_DB_URL: "", SUPABASE_URL: "", SUPABASE_SERVICE_KEY: "", LLM_BACKEND: "local", DOCS_DIR: join(dirname(DBCOPY), "docs") };
   const api = await launch("webapi", serverBin(), serverArgs, webapiPref, { cwd: APP, env: apiEnv, logFile: true }, /local 대역 · http/);
   const webapi = api.port;
   // web/.env 에 Supabase 키가 들어 있어도 시험은 local 대역(복사본 webapi)으로만 돈다: 프로세스 환경변수가 .env 파일보다 우선하므로 빈 값으로 덮는다
@@ -221,19 +216,8 @@ try {
     const v = await launch("vite", process.execPath, (p) => [VITE, "--port", String(p), "--strictPort", "--host", "127.0.0.1"], vitePref, { cwd: WEB, env: viteEnv, logFile: true }, /Local:/, [webapi]);
     viteP = v.port;
   }
-  // 잠금 시험용 webapi (별도 포트 · 별도 DB 복사본): 틀린 코드를 5번 넘게 넣으면 그 서버가 10분간 잠기므로, 본 서버와 떼어 놓는다
-  let lockPort = null;
-  if (want("admin")) {
-    const DB2 = join(ROOT, "ui_lock.db");
-    const m2 = spawnSync(process.execPath, [join(HERE, "make_mobile_db.ts"), DB2], { cwd: APP, env: { ...childEnv, SUPABASE_DB_URL: "", SUPABASE_URL: "", SUPABASE_SERVICE_KEY: "" }, encoding: "utf-8" });
-    if (m2.status === 0) {
-      const lk = await launch("webapi-lock", serverBin(), serverArgs, 8830, { cwd: APP, env: { ...apiEnv, DB_PATH: DB2 }, logFile: true }, /local 대역 · http/, [webapi, viteP]);
-      lockPort = lk.port;
-      childEnv.UI_LOCK_BASE = `http://127.0.0.1:${lockPort}`;
-    } else log("잠금 시험용 DB 복사본을 못 만들어 '잠김(서버)' 점검은 건너뜁니다");
-  }
-  const prev = await pick(4174, [webapi, viteP, lockPort ?? 0]);
-  ports = { webapi, vite: viteP, preview: prev, lock: lockPort, moved: webapi !== webapiPref || viteP !== vitePref };
+  const prev = await pick(4174, [webapi, viteP]);
+  ports = { webapi, vite: viteP, preview: prev, moved: webapi !== webapiPref || viteP !== vitePref };
   if (ports.moved) log(`기본 포트(${webapiPref}/${vitePref})를 다른 세션이 쓰고 있어 ${webapi}/${viteP} 로 옮겼습니다 (그 서버는 건드리지 않습니다)`);
   log(`서버 준비: webapi ${webapi} · vite ${viteP}`);
   const dev = `http://127.0.0.1:${viteP}`;
@@ -281,7 +265,7 @@ try {
 // ══ 정리 + 결과 ═══════════════════════════════════════════════════
 const stillUp = [];
 await cleanup();
-for (const [k, p] of Object.entries({ webapi: ports.webapi, vite: ports.vite, preview: ports.preview, lock: ports.lock })) if (p && (await busy(p))) stillUp.push(`${k}:${p}`);
+for (const [k, p] of Object.entries({ webapi: ports.webapi, vite: ports.vite, preview: ports.preview })) if (p && (await busy(p))) stillUp.push(`${k}:${p}`);
 const leftover = existsSync(ROOT);
 
 const cnt = (r, k) => r.lines.filter((l) => l.kind === k).length;
@@ -296,10 +280,8 @@ md += `## 환경\n\n`;
 md += `- 서버: TypeScript (server/webapi.ts)
 `;
 md += `- DB: ${dbNote} — **운영 festival.db 는 읽기만 했습니다.**\n`;
-md += `- 포트: webapi ${ports.webapi} · vite(개발) ${ports.vite} · preview(빌드본) ${ports.preview}${ports.lock ? ` · 잠금 시험용 webapi ${ports.lock}(별도 DB — 본 서버는 잠그지 않음)` : ""}${ports.moved ? " — 기본 포트(8799·5174)를 다른 세션이 쓰고 있어 옮겼습니다" : ""}\n`;
+md += `- 포트: webapi ${ports.webapi} · vite(개발) ${ports.vite} · preview(빌드본) ${ports.preview}${ports.moved ? " — 기본 포트(8799·5174)를 다른 세션이 쓰고 있어 옮겼습니다" : ""}\n`;
 md += `- 기계 부하: 시작할 때 CPU 사용률 ${Math.round(BUSY * 100)}% → 기다리는 시간 ×${SLOW} (검사 기준은 그대로)\n`;
-md += `- 운영자 코드(D5-31): 이 실행에서만 쓰는 무작위 값을 테스트 webapi 에 환경변수로 넣었습니다 (운영 .env 는 쓰지 않았고, 값은 기록하지 않습니다).
-`;
 md += `- 워커·LLM 없음(local). 그래서 '요청서 생성'은 요청이 쌓이는 데까지만 보고, 미리보기·DOCX 는 복사본에 이미 있는 요청서로 봅니다.\n`;
 md += `- 정리: ${stillUp.length === 0 && !leftover ? "제가 띄운 서버·크롬·임시 폴더를 모두 정리했습니다." : `⚠ 정리되지 않은 것 있음 — 서버 ${stillUp.join(", ") || "없음"} · 임시 폴더 ${leftover ? ROOT : "없음"}`}\n\n`;
 md += `## 묶음별\n\n| 묶음 | 통과 | 실패 | 건너뜀 | 시간 |\n|---|---|---|---|---|\n`;

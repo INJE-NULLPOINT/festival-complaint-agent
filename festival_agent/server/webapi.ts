@@ -7,16 +7,15 @@
 //   읽기        GET  /api/zones · /api/control · /api/action · /api/festival
 //   파일        GET  /api/docs/<파일명>  — DOCS_DIR(기본 output/)의 조치요청서 DOCX (Storage 대역)
 //   쓰기(RPC)   POST /api/rpc/<이름> — supabase/schema.sql 의 같은 이름 함수와 검증 규칙이 같다
-//   관리자 읽기 GET  /api/deleted (X-Admin-Code) — 최근 지운 민원
-//               GET  /api/dev?since_log=&since_cls= — 개발자 보기(내부 AI 동작·점수·계산식, D5-62). **운영자 코드 없이 공개 읽기** (응답은 가려서, 출처별 1분 60번 → 429)
+//   지운 민원   GET  /api/deleted — 최근 지운 민원 (되돌리기용)
+//               GET  /api/dev?since_log=&since_cls= — 개발자 보기(내부 AI 동작·점수·계산식, D5-62). **공개 읽기** (응답은 가려서, 출처별 1분 60번 → 429)
 //   실시간      GET  /api/events  (SSE) — 1초마다 테이블 지문을 비교해 알린다
 //
 // 지키는 규칙 (Supabase 와 동일)
 //   민원은 feedback_inbox 에만 넣는다. 마스킹은 워커(db.pull_inbox)가 한다.
 //   조치요청서는 doc_job 에 요청만 넣는다. 작성은 워커(doc_jobs)가 한다.
 //
-// 보안 동작 (webapi.py 와 같다): 운영자 코드(헤더 X-Admin-Code 또는 본문 p_code, 틀리면 401 · 미설정 403 · 잠김 429, 출처별) ·
-//   X-Forwarded-For(접속자가 루프백일 때만, 맨 오른쪽 값) · 본문 16KB 상한(413)·음수 길이 400 · POST 는 application/json 만(415) ·
+// 보안 동작 (webapi.py 와 같다): X-Forwarded-For(접속자가 루프백일 때만, 맨 오른쪽 값) · 본문 16KB 상한(413)·음수 길이 400 · POST 는 application/json 만(415) ·
 //   400/500 은 고정 문구(상세는 콘솔) · SSE 동시 50개 상한(503)·최대 30분·끊기면 바로 자리 반환 · 요청 읽기 제한 시간 ·
 //   같은 포트 중복 실행 거부 · 대기열(backlog) 128.
 //
@@ -27,7 +26,6 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import * as admin from "./core/admin.ts";
 import { config, docs_dir } from "./core/config.ts";
 import * as db from "./core/db.ts";
 import * as devfeed from "./core/devfeed.ts";
@@ -124,7 +122,7 @@ export async function get_settings(): Promise<Row> {
   return settings.get_settings();
 }
 
-/** 설정 쓰기 (운영자 코드 필요 — ADMIN_RPC). 입력 검사 문구는 ApiError(400)로 나간다. schema.sql 의 같은 이름 RPC 와 규칙이 같다. */
+/** 설정 쓰기. 입력 검사 문구는 ApiError(400)로 나간다. schema.sql 의 같은 이름 RPC 와 규칙이 같다. */
 async function _settings_call<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
@@ -179,7 +177,7 @@ export async function get_control(): Promise<Row> {
     deleted: await db.deleted_count(),                 // 운영자가 지운(숨긴) 민원 수 — 되돌리기용
     crowding: await intake.zone_burst(),                // 한 구역에 접수가 몰림 — 차단 없이 표시만 (D5-33 ③)
     backend_llm: llm.backend(),                         // 헤더 표시용: claude_code | anthropic | local (webapi 프로세스 기준)
-    synthetic: await db.synthetic_in_window(),          // 창 안에 replay/demo/dev 합성 민원이 있으면 on=true + count
+    synthetic: await db.synthetic_open(),              // 집계에 들어가는 replay/demo/dev 합성 민원이 있으면 on=true + count
     alerts: pick_alerts(unacked, sev),                  // 화면에 보일 3건 (등급 → 최신 순)
     alerts_total: (await _one("SELECT COUNT(*) n FROM alert WHERE acked=0"))!.n,      // 확인 안 한 알림 전체 개수 (KPI 용)
     fresh: await get_freshness(),                       // 마지막 갱신·에이전트 마지막 동작 시각 (D5-86)
@@ -283,7 +281,7 @@ export const dismiss_review = (p_id: unknown) => _review_call(review.dismiss, p_
 /** 닫은 것·운영자가 지정한 것을 다시 확인 필요로 (되돌리기). */
 export const reopen_review = (p_id: unknown) => _review_call(review.reopen, p_id);
 
-/** 최근에 지운 민원 (되돌리기용 목록, D5-42). 운영자 코드가 필요하다(ADMIN_RPC). schema.sql 의 list_deleted(p_code) 와 같은 모양 {ok, items}.
+/** 최근에 지운 민원 (되돌리기용 목록, D5-42). schema.sql 의 list_deleted() 와 같은 모양 {ok, items}.
  *  원문은 접수 때 이미 마스킹된 것이다. 지운 시각 최신순, 기본 50건(최대 200). */
 export async function list_deleted(p_limit: unknown = 50): Promise<Row> {
   let n: number;
@@ -292,8 +290,8 @@ export async function list_deleted(p_limit: unknown = 50): Promise<Row> {
 }
 
 /** 개발자 보기에 나가는 호출이 너무 잦을 때 (429). */
-export class TooManyRequests extends admin.AdminError {
-  constructor() { super("잠시 후 다시 보세요", 429); }
+export class TooManyRequests extends Error {
+  constructor() { super("잠시 후 다시 보세요"); this.name = "TooManyRequests"; }
 }
 export const DEV_LIMIT = 60;                 // 출처별 1분당 호출 수
 export const DEV_LIMIT_SHARED = 240;         // 출처를 모를 때 전체 공용
@@ -310,17 +308,12 @@ export function dev_rate_check(source: string | null, now_ms = Date.now()): void
   if (_dev_hits.size > 5000) for (const [k, v] of _dev_hits) if (!v.some((t) => now_ms - t < 60_000)) _dev_hits.delete(k);   // 오래된 출처 정리
 }
 
-/** 개발자 보기 (D5-62) — 에이전트 로그·최근 분류·심각도 내부값·카드 내부값·워커 상태. **공개 읽기 전용**(운영자 코드 없음, p_code 는 받아도 무시).
- *  schema.sql 의 dev_feed(p_code, p_since_log, p_since_cls) 와 같은 모양. 모든 글자는 devfeed.redact 로 가린다.
+/** 개발자 보기 (D5-62) — 에이전트 로그·최근 분류·심각도 내부값·카드 내부값·워커 상태. **공개 읽기 전용**.
+ *  schema.sql 의 dev_feed(p_since_log, p_since_cls) 와 같은 모양. 모든 글자는 devfeed.redact 로 가린다.
  *  점수·계산식이 들어 있어 방문객용 응답(/api/control)에는 절대 넣지 않는다. */
 export async function dev_feed(p_since_log: unknown = 0, p_since_cls: unknown = 0, source: string | null = null): Promise<Row> {
   dev_rate_check(source);
   return devfeed.dev_feed(p_since_log, p_since_cls);
-}
-
-/** 운영자 코드가 맞는지만 확인한다 (코드 입력 창용). 검사는 call_rpc 가 한다. */
-export async function check_admin(): Promise<boolean> {
-  return true;
 }
 
 // RPC 표: [함수, 필수 인자, 선택 인자]. 모르는 인자·빠진 필수 인자는 Python 의 TypeError 처럼 BadRequest → 400 고정 문구.
@@ -336,7 +329,6 @@ export const RPC: Record<string, RpcSpec> = {
   reopen_review: [reopen_review, ["p_id"], []],
   list_deleted: [list_deleted, [], ["p_limit"]],
   dev_feed: [dev_feed, [], ["p_since_log", "p_since_cls"]],
-  check_admin: [check_admin, [], []],
   get_settings: [get_settings, [], []],
   get_freshness: [get_freshness, [], []],
   save_festival: [save_festival, ["p_name", "p_region", "p_start_date", "p_end_date"], []],
@@ -345,8 +337,6 @@ export const RPC: Record<string, RpcSpec> = {
   set_zone_hidden: [set_zone_hidden, ["p_id", "p_hidden"], []],
   save_department: [save_department, ["p_label", "p_department", "p_contact"], []],
 };
-// 관리자 동작 — 운영자 코드(X-Admin-Code 헤더 또는 p_code)가 맞을 때만 실행한다 (D5-31).
-// 방문객이 쓰는 것은 submit_feedback 하나뿐이다. schema.sql 의 같은 이름 RPC 는 p_code 인자로 같은 검사를 한다.
 const MAX_BODY = 16 * 1024;          // POST 본문 상한 (바이트)
 const MAX_SSE = Number(process.env.WEBAPI_MAX_SSE) || 50;                      // 동시 실시간(SSE) 연결 상한 (D5-40 ④)
 const SSE_MAX_SECONDS = Number(process.env.WEBAPI_SSE_MAX_SECONDS) || 1800;    // 한 연결 최대 유지 시간 — 끊으면 브라우저가 다시 붙는다
@@ -358,20 +348,12 @@ function _log_error(where: string, e: unknown): void {
   const err = e as Error;
   console.error(`[webapi] 오류 ${where}: ${err?.name ?? "Error"}: ${err?.message ?? e}`);
 }
-export const ADMIN_RPC = new Set(["request_doc", "set_action_status", "delete_feedback", "restore_feedback",
-  "resolve_review", "dismiss_review", "reopen_review", "list_deleted", "check_admin",
-  "save_festival", "add_zone", "rename_zone", "set_zone_hidden", "save_department"]);
 
-/** RPC 하나를 실행한다. 관리자 동작이면 먼저 운영자 코드를 검사한다.
- *  코드 거부는 admin.AdminError(status 401/403/429), 검증 오류는 ApiError, 모르는 인자는 BadRequest.
- *  코드는 헤더(code)나 본문의 p_code 로 받는다 (Supabase RPC 와 같은 인자 이름).
- *  source 는 접속 주소의 하루짜리 해시 — 틀린 코드 횟수·잠금을 출처별로 센다 (D5-40). */
-export async function call_rpc(name: string, args: Row, code: string | null = null, source: string | null = null): Promise<unknown> {
+/** RPC 하나를 실행한다. 검증 오류는 ApiError, 모르는 인자는 BadRequest.
+ *  source 는 접속 주소의 하루짜리 해시 — 접수·개발자 보기 호출 빈도를 출처별로 센다 (D5-40). */
+export async function call_rpc(name: string, args: Row, source: string | null = null): Promise<unknown> {
   const a: Row = { ...(args ?? {}) };
-  const body_code = a.p_code ?? null;
-  delete a.p_code;
   const [fn, required, optional] = RPC[name];
-  if (ADMIN_RPC.has(name)) await admin.verify(code ? code : body_code, source);
   const known = new Set([...required, ...optional]);
   for (const k of Object.keys(a)) if (!known.has(k)) throw new BadRequest(`unexpected keyword argument '${k}'`);
   for (const k of required) if (!(k in a)) throw new BadRequest(`missing argument '${k}'`);
@@ -388,6 +370,7 @@ const GET: Record<string, () => Promise<unknown>> = {
   "/api/freshness": get_freshness,
   "/api/control": get_control,
   "/api/action": get_action,
+  "/api/deleted": async () => (await list_deleted()).items,
 };
 
 // ── 실시간 대역 ───────────────────────────────────────────────────
@@ -465,17 +448,6 @@ const header = (req: Req, name: string): string | null => {
   return Array.isArray(v) ? v[0] : (v ?? null);
 };
 
-async function adminGet(req: Req, res: Res, rpcName: string, args: Row = {}, whole = false): Promise<void> {
-  try {
-    const data = (await call_rpc(rpcName, args, header(req, "x-admin-code"), clientSource(req))) as Row;
-    send(res, 200, { backend: BACKEND, data: whole ? data : data.items });
-  } catch (e) {
-    if (e instanceof admin.AdminError) return send(res, e.status, { error: e.message });   // 401 · 403 · 429 — POST 와 같은 규칙
-    _log_error(`GET ${rpcName}`, e);
-    send(res, 500, { error: "서버 오류" });
-  }
-}
-
 async function doGet(req: Req, res: Res): Promise<void> {
   const pathname = new URL(req.url ?? "/", "http://x").pathname;
   if (pathname === "/api/events") return events(req, res);
@@ -483,7 +455,7 @@ async function doGet(req: Req, res: Res): Promise<void> {
   if (pathname === "/api/dev") {                                               // 개발자 보기 — 공개 읽기 (코드 없음), 출처별 호출 제한
     const qs = new URL(req.url ?? "/", "http://x").searchParams;
     try {
-      const data = await call_rpc("dev_feed", { p_since_log: qs.get("since_log") ?? 0, p_since_cls: qs.get("since_cls") ?? 0 }, null, clientSource(req));
+      const data = await call_rpc("dev_feed", { p_since_log: qs.get("since_log") ?? 0, p_since_cls: qs.get("since_cls") ?? 0 }, clientSource(req));
       return send(res, 200, { backend: BACKEND, data });
     } catch (e) {
       if (e instanceof TooManyRequests) return send(res, 429, { error: e.message });
@@ -491,7 +463,6 @@ async function doGet(req: Req, res: Res): Promise<void> {
       return send(res, 500, { error: "서버 오류" });
     }
   }
-  if (pathname === "/api/deleted") return adminGet(req, res, "list_deleted");   // 관리자 전용 읽기 — X-Admin-Code 헤더 (한글 코드는 POST /api/rpc/list_deleted 의 p_code)
   const fn = GET[pathname];
   if (!fn) return send(res, 404, { error: "없는 경로" });
   try {
@@ -542,10 +513,9 @@ async function doPost(req: Req, res: Res): Promise<void> {
     let args: unknown;
     try { args = raw.length ? JSON.parse(raw.toString("utf-8")) : {}; } catch { throw new BadRequest("json"); }
     if (args === null || typeof args !== "object" || Array.isArray(args)) throw new ApiError("요청 형식이 올바르지 않습니다");
-    const data = await call_rpc(name, args as Row, header(req, "x-admin-code"), clientSource(req));
+    const data = await call_rpc(name, args as Row, clientSource(req));
     send(res, 200, { backend: BACKEND, data });
   } catch (e) {
-    if (e instanceof admin.AdminError) return send(res, e.status, { error: e.message });   // 401 코드 없음·틀림 · 403 코드 미설정 · 429 잠김
     if (e instanceof ApiError) return send(res, 400, { error: e.message });                // 입력 검사 문구(사용자에게 보여 줄 문장)
     if (e instanceof BadRequest) { _log_error(`POST ${pathname}`, e); return send(res, 400, { error: "요청 형식이 올바르지 않습니다" }); }   // 모르는 인자 · 잘못된 JSON — 고정 문구
     _log_error(`POST ${pathname}`, e);
@@ -649,9 +619,6 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   await db.init_db();
-  if (!config.ADMIN_CODE) {
-    console.log("[webapi] ADMIN_CODE 가 비어 있어 관리자 동작(민원 지우기·조치 상태 변경·요청서 생성)을 .env 에 코드를 넣기 전까지 모두 거부합니다.");
-  }
   console.log(`[webapi] local 대역 · http://${host}:${port}  (DB ${config.DB_PATH})`);
   process.on("SIGINT", () => { console.log("\n[webapi] 종료"); process.exit(0); });
 }

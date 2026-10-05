@@ -20,7 +20,7 @@
 
 ## 백업·복원 (운영 Supabase)
 - `run_all_servers` 가 30분마다 (`SUPABASE_DB_URL` 이 있으면) 운영 테이블을 **읽기 전용** 트랜잭션으로 읽어 `backup/supabase_*.json` 한 파일로 저장하고 최근 12개만 남긴다.
-  `operator_secret`(코드 해시)·`admin_attempt`·`submit_rate` 는 넣지 않는다. 지금 바로: `node server/scripts/run_all_servers.ts --backup-now`.
+  `source_key`·`submit_rate` 는 넣지 않는다. 지금 바로: `node server/scripts/run_all_servers.ts --backup-now`.
 - 복원: `node server/cli.ts db restore <파일> [--live-db]` — 미리보기(테이블별 지금→복원 후 행 수) 뒤 확인 문구를 입력해야 바뀐다.
   운영 Supabase 는 `--live-db` 필수 + `운영복원` 입력, 복원 직전 상태를 `backup/before_restore_*.json` 으로 먼저 저장한다. 한 트랜잭션이라 실패하면 원래대로.
   연습은 임시 SQLite 로: `SUPABASE_DB_URL= DB_PATH=<임시.db> node server/cli.ts db restore <파일> --yes`.

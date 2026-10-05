@@ -1,10 +1,9 @@
 // 'AI 동작 보기' (D5-62) — 심사위원이 내부 AI 에이전트가 도는 모습을 보는 화면. 오른쪽 패널(모바일은 아래 시트), 관리자 화면 전용이다.
-//   · 헤더의 'AI 동작 보기' 스위치로 켜고 끈다. 기본은 꺼짐. 운영자 코드는 필요 없다. 켠 상태는 localStorage 에 기억한다(try/catch).
+//   · 헤더의 'AI 동작 보기' 스위치로 켜고 끈다. 기본은 꺼짐. 켠 상태는 localStorage 에 기억한다(try/catch).
 //   · 켜져 있는 동안만 3초마다 가져온다 (since 증분). 끄면 타이머가 즉시 멈춘다. 방문객 화면(?v=qr)에서는 initDev 가 불리지 않고 패널·스위치도 없다.
 //   · 로그 탭 맨 위에 에이전트의 흐름(⓪ 계획 → ① 분류 → ② 감시 → ③ 조치 → ④ 통합)을 보이고, 지금 돌고 있는 에이전트에 불이 들어온다.
 //   · 점수·계산식은 이 패널(심각도 탭) 안에서만 보인다 (관제·조치 화면에는 없다). 모양은 기존 토큰을 쓰고 막대는 쓰지 않는다.
 import "./dev.css";
-import { AdminDenied } from "./admin";
 import { api, type DevClassification, type DevFeed, type DevLog } from "./data";
 import { LABELS, esc } from "./ui";
 
@@ -185,7 +184,7 @@ export function initDev(): void {
     if (!on || busy) return;
     busy = true;
     try { apply(await api.devFeed({ log: sinceLog, cls: sinceCls })); }
-    catch (e) { live.textContent = e instanceof AdminDenied ? e.message : "연결 안 됨"; }      // 너무 잦으면 서버가 429(잠시 후 다시 보세요)를 준다
+    catch (e) { live.textContent = (e as Error).message || "연결 안 됨"; }      // 너무 잦으면 서버가 429(잠시 후 다시 보세요)를 준다
     finally { busy = false; }
   }
 

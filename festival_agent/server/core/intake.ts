@@ -111,13 +111,11 @@ export async function accept(zone_id: number | null, text: string, source: strin
   }));
 }
 
-/** 24시간 지난 출처 기록(submit_rate)과 운영자 코드 실패 기록(admin_attempt)을 지운다. 워커가 주기적으로 부른다. */
+/** 24시간 지난 출처 기록(submit_rate)을 지운다. 워커가 주기적으로 부른다. */
 export async function purge_old(now: Date | null = null): Promise<number> {
   const cutoff = _stamp(plus(now ?? seoul_now(), -hours(24)));
   const conn = await db.connect();
-  let n = (await conn.execute("DELETE FROM submit_rate WHERE at < ?", [cutoff])).rowcount;
-  n += (await conn.execute("DELETE FROM admin_attempt WHERE at < ?", [cutoff])).rowcount;
-  return n;
+  return (await conn.execute("DELETE FROM submit_rate WHERE at < ?", [cutoff])).rowcount;
 }
 
 /** 최근 window_sec 안에 min_count 건 이상 접수가 몰린 구역 — 차단하지 않고 표시만 한다 (심각도는 그대로). */

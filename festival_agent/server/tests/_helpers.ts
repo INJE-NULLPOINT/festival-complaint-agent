@@ -102,7 +102,7 @@ export async function withTempDb<T>(fn: (db: any) => Promise<T>): Promise<T> {
 /** _rows(spec, ref): [(라벨, 분 전, 감정, 안전여부)] → rank_labels 입력 행. */
 export function rows(spec: Array<[string, number, number, boolean]>, ref: Date) {
   return spec.map(([label, m, s, sf]) => ({
-    label, sentiment: s, is_safety: sf ? 1 : 0, posted_at: iso(ago(ref, m)), ingested_at: "",
+    label, sentiment: s, is_safety: sf ? 1 : 0, posted_at: iso(ago(ref, m)), ingested_at: "", zone_id: 1,      // 같은 구역 (S-04 는 구역별로 센다)
   }));
 }
 
@@ -122,9 +122,9 @@ export async function seed(db: any, items: Array<[number | null, string, number,
   return ids;
 }
 
-export async function cards(window = 60) {
+export async function cards() {
   const issues = await tryImport("core/issues.ts");
-  return await issues.build_cards(window);
+  return await issues.build_cards();
 }
 
 /** _one_card: 검사용 카드 하나 (안전·즉시 또는 주차). */
@@ -152,15 +152,6 @@ export async function reviewRow(db: any, text: string, o: { safety: boolean; sug
 
 export async function cls(db: any, fid: number) {
   return await one(db, "SELECT * FROM classification WHERE feedback_id=?", [fid]);
-}
-
-/** _AdminCode: config.ADMIN_CODE 를 잠깐 바꾼다. */
-export async function withAdminCode<T>(code: string, fn: () => Promise<T>): Promise<T> {
-  const cfg = await tryImport("core/config.ts");
-  const config = cfg.config ?? cfg;
-  const prev = config.ADMIN_CODE;
-  config.ADMIN_CODE = code;
-  try { return await fn(); } finally { config.ADMIN_CODE = prev; }
 }
 
 /** 환경변수를 잠깐 바꾼다 (Python 의 os.environ 바꿨다 되돌리기). */

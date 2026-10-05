@@ -85,7 +85,7 @@ async function main(): Promise<number> {
       await backup(s, dbp);
       s.close();
       const d = new DatabaseSync(dbp);
-      for (const t of ["admin_attempt", "submit_rate"]) { try { d.exec(`DELETE FROM ${t}`); } catch { /* 표가 없다 */ } }
+      for (const t of ["submit_rate"]) { try { d.exec(`DELETE FROM ${t}`); } catch { /* 표가 없다 */ } }
       d.close();
     } else {
       notes.push("festival.db 가 없어 빈 새 DB 로 측정");

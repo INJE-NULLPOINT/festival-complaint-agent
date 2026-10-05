@@ -151,7 +151,7 @@ async function seedWindowRows(rules: any, config: any) {
   for (const r of parseCsv(readFileSync(SEED, "utf8"))) {
     const c = await rules.classify(r.text);
     if (c.confidence < config.REVIEW_CONFIDENCE) continue;
-    out.push({ label: c.label, sentiment: c.sentiment, is_safety: c.is_safety ? 1 : 0, posted_at: r.posted_at, ingested_at: "" });
+    out.push({ label: c.label, sentiment: c.sentiment, is_safety: c.is_safety ? 1 : 0, posted_at: r.posted_at, ingested_at: "", zone_id: r.zone });
   }
   return out;
 }
@@ -166,7 +166,7 @@ test("test_4일창_역전_유지", async (t) => {
   const win = rs.filter((r) => r.posted_at >= cut);
   const out = await S.rank_labels(win, { unhandled_fn: () => true, ref });
   const by = Object.fromEntries(out.map((r: any) => [r.label, r]));
-  assert.ok(out[0].label === "safety" && out[0].grade === "immediate");
+  assert.ok(out[0].label === "safety" && out[0].grade === "high");     // S-04 는 같은 구역 1시간 3건 — 4일에 흩어진 시드의 안전 11건은 높음
   assert.equal(out[1].label, "crowd");
   assert.equal(by.parking.freq, Math.max(...out.map((r: any) => r.freq)));
   assert.notEqual(by.parking.grade, "immediate");
@@ -264,7 +264,7 @@ test("test_유형순위_정렬_즉시_혼잡이_높음_주차_아래로_내려�
   const [S] = m;
   const ref = new Date(2026, 8, 30, 14, 0, 0);
   const spec: Array<[string, number, number, boolean]> = [
-    ...[300, 290, 280].map((mm) => ["crowd", mm, -0.1, true] as [string, number, number, boolean]),
+    ...[55, 50, 45].map((mm) => ["crowd", mm, -0.1, true] as [string, number, number, boolean]),
     ...Array.from({ length: 12 }, (_, i) => ["parking", i * 5, -0.5, false] as [string, number, number, boolean]),
   ];
   const out = await S.rank_labels(rows(spec, ref), { unhandled_fn: () => false, ref });

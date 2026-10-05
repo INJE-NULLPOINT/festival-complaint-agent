@@ -54,7 +54,7 @@ node server/cli.ts reset --all               # 초기화
 ```bash
 node server/cli.ts reset --all
 node server/cli.ts replay start --speed 20000
-node server/cli.ts --window 5835 watch --drive --interval 2
+node server/cli.ts watch --drive --interval 2      # 한 프레임만: watch --drive --once
 ```
 
 화면이 2초마다 다시 그려지면서 민원이 쌓이고 순위가 바뀌는 과정이 보입니다.
@@ -65,22 +65,17 @@ node server/cli.ts --window 5835 watch --drive --interval 2
 
 | 순위 | 건수 순위 | 심각도 순위 (등급) |
 |---|---|---|
-| 1 | 주차/교통 54건 | **안전 11건 — 즉시** |
+| 1 | 주차/교통 54건 | **안전 11건 — 높음** |
 | 2 | 가격/바가지 30건 | 혼잡 3건 — 높음 (위험 신호 1건) |
 | 3 | 화장실 29건 | 주차/교통 54건 — 보통 |
 | 4 | 긍정 18건 (심각도 제외) | 화장실 29건 — 보통 |
 | 5 | 안전 11건 | 가격/바가지 30건 — 낮음 |
 | 6 | 안내/동선 10건 | 안내/동선 10건 — 낮음 |
 
-★ 역전: 건수 1위 주차/교통(54건)은 심각도 3위(보통), 안전은 11건뿐인데 1위(즉시).
-관제 카드도 같은 순서입니다: 안전 3장(소망등 달기 구역 · 진주교 남단 주차장 · 남강 수상무대) 즉시 → 유등터널 혼잡 높음 → 주차 카드들 보통.
+★ 역전: 건수 1위 주차/교통(54건)은 심각도 3위(보통), 안전은 11건뿐인데 1위(높음). 합성 시드는 같은 구역 1시간 안전 3건(S-04)을 채우지 않아 '즉시'가 아닌 '높음'입니다.
 혼잡이 안전 가중을 받는 것은 3건 중 1건에 '밀려다녔어요' 같은 위험 신호가 있어서입니다(D5-59). 신호 없는 혼잡은 주차·화장실과 똑같이 계산합니다.
 
-(개발용 합성 시드 160건 · 규칙 기반 대역 분류 · 창 5835분. 분류 신뢰도가 낮은 5건은
-"확인 필요"로 빠져 있어 창 건수가 155건입니다.)
-
-`--window` 로 심각도 창을 조정합니다. 기본 60분이며, 창 밖 데이터가 많으면
-상태 화면이 알려줍니다.
+(개발용 합성 시드 160건 · 규칙 기반 대역 분류.)
 
 ### 시연·개발 (API 키 없이도 됨)
 
@@ -152,7 +147,7 @@ node server/worker.ts               # 에이전트가 한 바퀴 돌 때마다 �
 ### 지금 구성 — Supabase (2026-09-30 연결)
 
 워커(`.env` 의 `SUPABASE_DB_URL`)와 웹(`web/.env` 의 `VITE_SUPABASE_URL`·`VITE_SUPABASE_ANON_KEY`)이 모두 Supabase 에 붙어 있습니다.
-스키마·RLS·RPC·Storage `docs` 버킷을 적용했고 운영자 코드 해시를 등록했습니다. 웹 헤더에 `실시간 · Supabase` 가 뜹니다.
+스키마·RLS·RPC·Storage `docs` 버킷을 적용했습니다. 웹 헤더에 `실시간 · Supabase` 가 뜹니다.
 연결을 다시 만들거나 새 프로젝트로 옮길 때는 아래 'Supabase 연결 방법'을 따릅니다.
 
 ### 개발·테스트용 — local 대역 (`webapi.ts`)
@@ -170,7 +165,7 @@ cd web && npm install && npm run dev   # 터미널 3 — http://localhost:5173
 | Supabase | local 대역 (`webapi.ts`) |
 |---|---|
 | PostgREST 읽기 | `GET /api/zones` · `/api/control` · `/api/action` |
-| RPC 6개 (`schema.sql`) | `POST /api/rpc/<이름>` — 관리자 동작 5개는 운영자 코드 필요(아래 '운영자 코드'), 검증 규칙 동일 (한글·영문·숫자 2개 이상 · 500자 이하 · 구역 존재 · `department_map` 기준 · 없는 민원 id 는 오류 · 서울 시각) |
+| RPC (`schema.sql`) | `POST /api/rpc/<이름>` — 관리자 동작도 코드 없이 바로 실행(아래 '관리자 동작'), 검증 규칙 동일 (한글·영문·숫자 2개 이상 · 500자 이하 · 구역 존재 · `department_map` 기준 · 없는 민원 id 는 오류 · 서울 시각) |
 | Realtime | `GET /api/events` (SSE, 1초 지문 비교) |
 | Storage `docs` 버킷 | `GET /api/docs/<파일명>` — `output/` 의 DOCX (경로 탈출 차단) |
 
@@ -179,7 +174,7 @@ cd web && npm install && npm run dev   # 터미널 3 — http://localhost:5173
 ### Supabase 연결 방법 (다시 설정할 때 · 코드 수정 없음)
 
 1. **스키마** — Supabase 대시보드 > SQL Editor 에 `supabase/schema.sql` 전체를 붙여 넣고 Run.
-   테이블(`issue`·`operator_secret` 포함) · RLS · RPC 6개 · Realtime · Storage `docs` 버킷이 만들어집니다. 여러 번 실행해도 안전합니다.
+   테이블(`issue`·`source_key` 포함) · RLS · RPC · Realtime · Storage `docs` 버킷이 만들어집니다. 여러 번 실행해도 안전합니다.
 2. **워커 `.env`** (`.env.example` 참고)
    - `SUPABASE_DB_URL` — Connect > Session pooler 연결 문자열 (있으면 SQLite 대신 Postgres)
    - `SUPABASE_URL` · `SUPABASE_SERVICE_KEY` — 조치요청서 DOCX 를 Storage 에 올릴 때 사용.
@@ -223,8 +218,8 @@ Windows 방화벽이 포트를 막으면 처음 한 번 허용해야 합니다. 
 | `/#action` | 조치 — 유형별 **조치요청서 생성** 버튼 → 워커가 작성 → 미리보기 · DOCX · 처리 상태 |
 | `/?v=qr` | 방문객 접수폼 (QR 코드용, 상단 탭 숨김) |
 
-- 웹(anon 키)은 읽기만 하고, 쓰기는 RPC 6개(`submit_feedback` · `request_doc` · `set_action_status` · `delete_feedback` · `restore_feedback` · `check_admin`)로만 합니다.
-  방문객이 코드 없이 쓰는 것은 `submit_feedback` 뿐이고, 나머지는 운영자 코드가 맞아야 동작합니다.
+- 웹(anon 키)은 읽기만 하고, 쓰기는 RPC(`submit_feedback` · `request_doc` · `set_action_status` · `delete_feedback` · `restore_feedback` 등)로만 합니다.
+  관리자 RPC 도 코드 없이 바로 실행됩니다(아래 '관리자 동작').
 - `/api/control` 은 관제 카드 `issues[]`(issue 표의 열 그대로, JSON 열은 문자열)와 `review`(확인 필요) · `review_safety`(그중 안전 의심) · `deleted`(지운 개수) 를 함께 줍니다.
 - 접수 원문은 `feedback_inbox` 에 잠깐 들어갔다가 워커가 **마스킹한 뒤** `feedback` 으로 옮기고 지웁니다.
 - `SUPABASE_DB_URL` 을 비워 두면 예전처럼 `festival.db`(SQLite) 로 동작합니다. 테스트도 SQLite 로 돕니다.
@@ -240,7 +235,7 @@ node server/webapi.ts                       # 터미널 2 (각 터미널마다 �
 cd web; npm run phone                  # 터미널 3 — 폰은 http://<PC IP>:4173/?v=qr
 ```
 
-운영자 코드(`ADMIN_CODE`)는 그대로 `.env` 에서 읽습니다. 참여자가 넣은 민원은 `node server/cli.ts db show <번호>` 로 추적합니다
+참여자가 넣은 민원은 `node server/cli.ts db show <번호>` 로 추적합니다
 (웹 접수 창의 `W-번호` 도 같은 번호로 찾힙니다). `SUPABASE_DB_URL` 이 켜져 있으면 DB 가 Supabase 이므로 비워 두고 돌립니다.
 검증용 문장은 사람이 직접 쓴 것이라 합성이 아닙니다 — 시연용 합성 시나리오와 DB 파일을 섞지 마세요.
 
@@ -248,44 +243,13 @@ cd web; npm run phone                  # 터미널 3 — 폰은 http://<PC IP>:4
 `node server/scripts/demo_scenario.ts --reset --lead 120` 으로 `output/demo_festival.db` 에 배경 가상 민원 24건(`source='demo'`)을 넣은 뒤
 T+40·T+50초에 유등터널 혼잡 2건을 예약 투입합니다 (운영 DB 는 거부). 전부 지어낸 문장이라 영상에 합성임을 밝혀야 합니다.
 
-### 운영자 코드 (관리자 동작 보호, D5-31)
+### 관리자 동작 (코드 없이 실행)
 
-로그인이 없어서, 코드가 없으면 주소를 아는 누구나 민원을 지우거나 조치 상태를 바꿀 수 있습니다.
-그래서 아래 네 가지는 **운영자 코드**가 맞을 때만 실행됩니다. 방문객이 쓰는 것은 접수(`submit_feedback`) 하나뿐이고 코드가 필요 없습니다.
+민원 지우기·되돌리기(`delete_feedback` · `restore_feedback`), 조치 상태 변경(`set_action_status`), 조치요청서 생성(`request_doc`)은
+운영자 코드 없이 버튼을 누르면 바로 실행됩니다(사용자 결정). 방문객 화면(`?v=qr`)에는 이 버튼이 없습니다.
 
-| 관리자 동작 | local 대역(`webapi.ts`) | Supabase RPC |
-|---|---|---|
-| 민원 지우기·되돌리기 | `delete_feedback` · `restore_feedback` | 같은 이름 + `p_code` |
-| 조치 상태 변경 | `set_action_status` | 같은 이름 + `p_code` |
-| 조치요청서 생성 | `request_doc` | 같은 이름 + `p_code` |
-| 코드 확인(입력 창용) | `check_admin` | 같은 이름 + `p_code` |
-
-**코드 정하는 법 — 값은 직접 정해 아래 두 곳에만 넣습니다. 채팅·문서·커밋에 적지 마세요.** 길고 추측하기 어려운 값이 좋습니다.
-
-1. **local 대역**: `festival_agent/.env` 의 `ADMIN_CODE=` 뒤에 값을 넣고 `webapi.ts`(또는 `run_all_servers.ts`)를 다시 켭니다.
-   - 비워 두면 관리자 동작이 **전부 거부**됩니다 (열린 채로 시작하지 않음). `webapi.ts` 시작 때 경고가 나옵니다.
-   - 웹은 요청 헤더 `X-Admin-Code` (또는 본문 `p_code`)로 보냅니다. 없으면 401, 틀리면 401, 코드 미설정이면 403, 잠기면 429 입니다.
-2. **Supabase**: `supabase/schema.sql` 을 다시 실행한 뒤, SQL Editor 에서 **한 번만** 다음 문장을 실행합니다 (`<운영자 코드>` 자리에 값을 넣습니다. 이 문장을 파일에 저장하지 마세요).
-
-   ```sql
-   insert into operator_secret (id, code_hash)
-   values (1, extensions.crypt('<운영자 코드>', extensions.gen_salt('bf')))
-   on conflict (id) do update set code_hash = excluded.code_hash;
-   ```
-
-   코드는 해시로만 저장되고 `operator_secret` 은 anon 이 읽지 못합니다. 이 표가 비어 있으면 관리자 RPC 는 전부 거부됩니다.
-   코드를 바꾸려면 같은 문장을 새 값으로 다시 실행합니다.
-
-**규칙** (두 대역 공통): 틀린 코드는 실패로 세고, 최근 10분에 5번 틀리면 그 10분 동안은 맞는 코드도 거부합니다. 맞으면 실패 기록이 비워집니다.
-코드를 안 보낸 요청은 실패로 세지 않습니다. 비교는 시간차 공격을 막는 방식(`hmac.compare_digest`)으로 합니다.
-
-**Supabase RPC 응답**: 코드가 틀렸을 때 예외를 던지면 '틀린 시도' 기록까지 롤백되어 잠금이 작동하지 않으므로, 관리자 RPC 는
-`{"ok": true, ...}` 또는 `{"ok": false, "error": "운영자 코드가 필요합니다"}` 를 **반환값으로** 돌려줍니다 (`request_doc` 은 `id` 포함).
-없는 민원·잘못된 상태 같은 검증 오류는 코드를 통과한 뒤의 일이라 예외 그대로입니다. 예전 시그니처(코드 인자 없음)는 `schema.sql` 이 지웁니다.
-
-**한계**: 공유 코드라 누가 했는지는 구분하지 못하고(조치 기록에는 '운영자'로만 남음), 코드가 새면 바꿔야 합니다. 읽기는 여전히 열려 있습니다
-(원문은 접수 때 마스킹됨). 휴대폰으로 시연하려고 `webapi.ts` 를 `--host 0.0.0.0` 으로 열면 같은 와이파이의 누구나 닿으므로 그때 이 코드가 실제로 필요해집니다.
-나중에 Supabase Auth(가입 차단) + RPC 안의 `auth.uid()` 검사로 바꿀 수 있습니다.
+**한계**: 로그인이 없어서 관리 화면 주소에 닿는 사람은 누구나 이 동작을 할 수 있습니다. `webapi.ts` 는 기본으로 `127.0.0.1` 에만 열리지만,
+휴대폰 시연을 위해 `--host 0.0.0.0` 으로 열면 같은 와이파이의 누구나 닿습니다. 나중에 Supabase Auth + RPC 안의 `auth.uid()` 검사로 바꿀 수 있습니다.
 
 ## 백엔드 전환
 
@@ -351,7 +315,7 @@ festival_agent/
 │  │  ├─ severity.ts      심각도 계산 (결정적 함수) ★
 │  │  ├─ issues.ts        관제 카드 생성·문구 검사
 │  │  ├─ privacy.ts       개인정보 마스킹·인젝션 탐지
-│  │  ├─ intake.ts · review.ts · admin.ts   접수 · 확인 필요 처리 · 운영자 코드
+│  │  ├─ intake.ts · review.ts   접수 · 확인 필요 처리
 │  │  ├─ memory.ts        분류 기억 (비슷한 과거 사례, 운영자 지정 우선)
 │  │  ├─ rules.ts         local 대역 키워드 규칙 (개발용)
 │  │  ├─ tourapi.ts       한국관광공사 TourAPI 연동 (외부 API)
@@ -468,7 +432,7 @@ Agent Path (배후, 주기 실행)
   `restore_feedback` 으로 되돌리면 그대로 돌아옵니다 (`/api/control` 의 `deleted` = 지운 개수).
 
 **확인 필요 처리 (D5-32)**: 운영자가 세 가지로 처리합니다 — 유형 지정(`resolve_review`) · 유형 없음으로 닫기(`dismiss_review`, `status='dismissed'`) · 지우기(`delete_feedback`).
-되돌리기는 `reopen_review`. 세 RPC 모두 운영자 코드가 필요하고 `status='review'`(되돌리기는 닫은 것·운영자가 지정한 것)일 때만 실행됩니다 — 이미 처리된 민원은 "이미 처리된 민원입니다".
+되돌리기는 `reopen_review`. 세 RPC 모두 `status='review'`(되돌리기는 닫은 것·운영자가 지정한 것)일 때만 실행됩니다 — 이미 처리된 민원은 "이미 처리된 민원입니다".
 모델 제안은 `classification.suggested_label` 열에 저장되고, 운영자가 처리한 건은 `decided_by='operator'` 로 표시되어 `measure_accuracy` 가 정확도에서 뺍니다.
 `/api/control` 의 `review_items[]` 는 안전 의심 먼저·오래된 것 먼저 최대 20건이고, 안전 의심이 15분 넘게 방치되면 알림(`review_safety_stale`)이 한 번 올라갑니다.
 `/api/control` 의 feed 항목에는 웹 접수에 한해 `receipt_no`(접수 완료 창의 `W-번호`)가 붙어 민원 번호와 맞춰 볼 수 있고,
@@ -494,8 +458,8 @@ Agent Path (배후, 주기 실행)
 ### 현재 상태 — Level 2~3
 
 접수 → 분류 → 심각도 → 알림 → 조치요청서(DOCX) → 브리핑까지 **한 줄로 관통**합니다.
-개발용 합성 시드 160건 기준으로 **건수 1위(주차/교통 54건, 심각도 3위·보통)와 심각도 1위(안전 11건, 즉시)가 갈리는
-역전**이 실제로 재현됩니다 (위 '실시간으로 보기' 표, 2026-10-01 재측정).
+개발용 합성 시드 160건 기준으로 **건수 1위(주차/교통 54건, 심각도 3위·보통)와 심각도 1위(안전 11건, 높음)가 갈리는
+역전**이 실제로 재현됩니다 (위 '실시간으로 보기' 표, 2026-10-05 재측정).
 
 ### 2인 역할
 
@@ -513,7 +477,7 @@ Agent Path (배후, 주기 실행)
 1. 에이전트 5종과 실행 루프·작업 큐(프레임워크 없이 직접 구현), 실시간/배후 2경로 구조
 2. 결정적 심각도 함수(규칙 6종·경계 규칙 4종, 계산식 노출)
 3. 계획(주기마다 돌릴 단계·창 결정)과 기억(비슷한 과거 사례)
-4. 관제 조치 카드와 AI 문구 검사, 확인 필요 처리, 운영자 코드
+4. 관제 조치 카드와 AI 문구 검사, 확인 필요 처리
 5. 개인정보 마스킹·프롬프트 인젝션 탐지
 6. 부서 매핑과 조치요청서 DOCX 생성
 7. 리플레이 엔진, 개발용 합성 시드, 시연용 합성 시나리오
@@ -551,7 +515,7 @@ API 호출마다 `agent_log` 에 `api_call` 행(토큰 수·응답 모델)이 �
 보고서를 5쪽에 맞추며 뺀 내용입니다. 수치의 기준은 보고서 4장 표와 같습니다.
 
 **개발계획서와 달라진 점 — 자세히**
-- 화면: Streamlit → 웹(Vite + TypeScript) + Supabase (2026-10-01). ①실시간 반영 — 바뀐 부분만 다시 그림(Supabase Realtime, 키가 없으면 `webapi.ts` SSE). ②모바일 접수 — 휴대폰 폭 접수 화면과 구형 브라우저용 빌드. ③운영자 코드 보호 — 관리자 동작을 서버 RPC 에서 코드로 막음. ④배포 — 정적 웹 빌드 + Supabase 라 앱 서버 불필요.
+- 화면: Streamlit → 웹(Vite + TypeScript) + Supabase (2026-10-01). ①실시간 반영 — 바뀐 부분만 다시 그림(Supabase Realtime, 키가 없으면 `webapi.ts` SSE). ②모바일 접수 — 휴대폰 폭 접수 화면과 구형 브라우저용 빌드. ③배포 — 정적 웹 빌드 + Supabase 라 앱 서버 불필요.
 - 서버 언어: Python → TypeScript(Node 24) (2026-10-01). 모듈 구조·함수 이름·동작을 1:1 로 옮기고, 단위 테스트와 Test Case 5종을 같은 입력·기대값으로 옮김. Python 판과 TS 판을 개발용 시드 160건으로 한 바퀴 돌려 차이 0건을 확인한 뒤 Python 코드를 지움.
 
 **심각도 규칙의 근거 (방향만 — 숫자는 설계값, 근거 목록은 `제출_준비/심각도_기준_양식.md` 9절)**

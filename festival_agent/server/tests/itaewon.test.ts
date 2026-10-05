@@ -10,9 +10,9 @@ test("안전 신고가 3건째 들어온 분에 S-04 즉시, 그 전 분에는 �
   const m = await need(t, "scripts/_itaewon.ts"); if (!m) return;
   const [{ timeline }] = m;
   const calls = [
-    { posted_at: T("20:40"), text: "골목에 사람이 너무 몰려서 위험해요", label: "crowd", is_safety: true },
-    { posted_at: T("20:47"), text: "사람들이 밀려서 다칠 것 같아요", label: "crowd", is_safety: true },
-    { posted_at: T("20:53"), text: "넘어진 사람이 있어요 빨리 와 주세요", label: "crowd", is_safety: true },
+    { posted_at: T("20:40"), zone: "골목", text: "골목에 사람이 너무 몰려서 위험해요", label: "crowd", is_safety: true },
+    { posted_at: T("20:47"), zone: "골목", text: "사람들이 밀려서 다칠 것 같아요", label: "crowd", is_safety: true },
+    { posted_at: T("20:53"), zone: "골목", text: "넘어진 사람이 있어요 빨리 와 주세요", label: "crowd", is_safety: true },
   ];
   const tl = timeline(calls, { tail_min: 5 });
   assert.equal(tl.first_s04.crowd, "2026-10-01T20:53");

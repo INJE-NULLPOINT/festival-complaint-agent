@@ -1,8 +1,8 @@
 // ⓟ 계획 에이전트 (Planner) — 주기 시작 때 이번 주기에 무엇을 할지 스스로 정한다. (신규, D5-65)
 //
 // 심사 지적: "①→④ 순서가 코드에 고정돼 있다". 그래서 Agent Path 는 주기마다 먼저 이 에이전트를 부르고, 워커는 그 계획대로 에이전트를 부른다.
-//   observe → plan_cycle(도구 호출로 계획을 남김) → 워커가 계획대로 ②(필요하면 짧은 창 재확인)·③·④ 를 부른다.
-// 계획이 고르는 것: window_min(15: 짧은 창으로 급증을 한 번 더 확인 / 60: 기본) · focus_labels(다시 볼 유형) · run_dispatcher(③을 부를지)
+//   observe → plan_cycle(도구 호출로 계획을 남김) → 워커가 계획대로 ②·③·④ 를 부른다.
+// 계획이 고르는 것: focus_labels(다시 볼 유형) · run_dispatcher(③을 부를지)
 //                   · run_supervisor(④를 부를지) · reason(이유).
 // **안전 규칙상 필수 단계는 계획이 건너뛸 수 없다.** 분류(①)는 계획과 무관하게 매 주기 돌고, 심각도 계산·안전 알림(②)은 항상 돈다
 //   (plan_cycle 에 그런 인자가 없고, 모르는 인자는 거부된다). 즉시 등급인데 요청서가 없으면 ③을, 즉시 등급이 있으면 ④를 계획이 끄려 해도
@@ -16,11 +16,9 @@ import { pending_labels } from "./dispatcher.ts";
 
 export type Row = Record<string, any>;
 
-export const WINDOWS = [15, 60] as const;
 export const MUST_RUN = ["classify", "monitor"] as const;     // 계획이 건너뛸 수 없는 단계
 
 export interface Plan {
-  window_min: number;
   focus_labels: string[];
   run_dispatcher: boolean;
   run_supervisor: boolean;
@@ -36,7 +34,6 @@ export const SYSTEM = `너는 지역 축제 운영 관제 시스템의 '계획 �
 plan_cycle 을 딱 1번 호출해 계획을 남기면 끝난다. 따로 보고하지 않는다.
 
 정하는 것
-- window_min: 15 또는 60. 기본은 60. 최근 15분 유입이 갑자기 늘었거나 급증이 의심되면 15 (짧은 창으로 급증을 한 번 더 확인한다).
 - focus_labels: 이번 주기에 특히 다시 볼 유형 (즉시·높음 등급이거나 급증한 유형). 없으면 빈 목록.
 - run_dispatcher: 조치 에이전트(③)를 부를지. 요청서가 필요한 유형(pending_actions)이 있으면 true, 없으면 false.
 - run_supervisor: 통합 에이전트(④)를 부를지. 마지막 브리핑 뒤에 새로 분류된 민원이 있거나 즉시 등급이 있으면 true.
@@ -52,15 +49,10 @@ plan_cycle 을 딱 1번 호출해 계획을 남기면 끝난다. 따로 보고�
 export const _STATE: { obs: Row | null; plan: Plan | null } = { obs: null, plan: null };
 
 /** 이번 주기의 상황을 읽는다 (읽기 전용). 모델 프롬프트와 local 규칙이 같은 것을 본다. */
-export async function observe(window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Row> {
-  const rows60 = await db.window_rows(window_min);
-  const rows15 = await db.window_rows(15);
-  const count = (rows: Row[]) => {
-    const c: Record<string, number> = {};
-    for (const r of rows) c[r.label] = (c[r.label] ?? 0) + 1;
-    return c;
-  };
-  const ranked = await db.ranked(window_min);
+export async function observe(): Promise<Row> {
+  const counts: Record<string, number> = {};
+  for (const r of await db.open_rows()) counts[r.label] = (counts[r.label] ?? 0) + 1;
+  const ranked = await db.ranked();
   const pending = (await pending_labels()).map((p) => ({ label: p.label, grade: p.grade }));
   const conn = await db.connect();
   const brief = (await conn.execute("SELECT created_at FROM briefing ORDER BY id DESC LIMIT 1")).fetchone();
@@ -69,9 +61,7 @@ export async function observe(window_min: number = config.DEFAULT_WINDOW_MIN): P
      WHERE c.status='done' AND f.deleted_at IS NULL AND c.processed_at > ?`, [brief?.created_at ?? ""])).fetchone()!.c;
   const minutes_since = brief ? Math.max(0, Math.round((Date.now() - Date.parse(String(brief.created_at))) / 60000)) : null;
   return {
-    window_min,
-    counts_window: count(rows60),
-    counts_15min: count(rows15),
+    counts,
     labels: ranked.map((r) => ({
       label: r.label, grade: r.grade, freq: r.freq, spiked: Boolean(r.spike?.spiked), safety_freq: r.safety_freq ?? 0,
     })),
@@ -87,11 +77,6 @@ export async function observe(window_min: number = config.DEFAULT_WINDOW_MIN): P
 export function enforce(raw: Partial<Plan> & Row, obs: Row | null): Plan {
   const overrides: string[] = [];
   const labels = new Set<string>(Object.keys(config.LABELS));
-  let window_min = Number(raw.window_min);
-  if (!(WINDOWS as readonly number[]).includes(window_min)) {
-    if (raw.window_min !== undefined) overrides.push(`window_min ${String(raw.window_min)} → ${config.DEFAULT_WINDOW_MIN} (15 또는 60 만 허용)`);
-    window_min = config.DEFAULT_WINDOW_MIN;
-  }
   let focus = Array.isArray(raw.focus_labels) ? raw.focus_labels.map(String).filter((l) => labels.has(l)) : [];
   let run_dispatcher = raw.run_dispatcher !== false;
   let run_supervisor = raw.run_supervisor !== false;
@@ -109,7 +94,7 @@ export function enforce(raw: Partial<Plan> & Row, obs: Row | null): Plan {
   for (const l of immediate) if (!focus.includes(l)) focus.push(l);       // 즉시 등급 유형은 항상 다시 본다
   focus = [...new Set(focus)];
   return {
-    window_min, must_run: [...MUST_RUN], focus_labels: focus, run_dispatcher, run_supervisor, overrides,
+    must_run: [...MUST_RUN], focus_labels: focus, run_dispatcher, run_supervisor, overrides,
     reason: String(raw.reason ?? "").slice(0, 200), source: "agent",
   };
 }
@@ -120,40 +105,36 @@ export const plan_cycle = tool({
   description:
     "이번 주기의 계획을 남긴다. 분류·심각도 계산은 항상 실행되므로 계획에 넣지 않는다. 딱 1번 호출한다.",
   properties: {
-    window_min: { type: "integer", enum: [...WINDOWS], description: "감시 창(분). 기본 60, 급증이 의심되면 15" },
     focus_labels: { type: "array", items: { type: "string", enum: Object.keys(config.LABELS) }, description: "다시 볼 유형" },
     run_dispatcher: { type: "boolean", description: "조치 에이전트(③)를 부를지" },
     run_supervisor: { type: "boolean", description: "통합 에이전트(④)를 부를지" },
     reason: { type: "string", description: "이유 한 문장" },
   },
-  required: ["window_min", "run_dispatcher", "run_supervisor", "reason"],
-  params: ["window_min", "focus_labels", "run_dispatcher", "run_supervisor", "reason"],
-}, async (window_min: number, focus_labels: string[] = [], run_dispatcher: boolean, run_supervisor: boolean, reason = ""): Promise<Row> => {
-  const plan = enforce({ window_min, focus_labels, run_dispatcher, run_supervisor, reason }, _STATE.obs);
+  required: ["run_dispatcher", "run_supervisor", "reason"],
+  params: ["focus_labels", "run_dispatcher", "run_supervisor", "reason"],
+}, async (focus_labels: string[] = [], run_dispatcher: boolean, run_supervisor: boolean, reason = ""): Promise<Row> => {
+  const plan = enforce({ focus_labels, run_dispatcher, run_supervisor, reason }, _STATE.obs);
   plan.source = llm.is_local() ? "local" : "agent";
   _STATE.plan = plan;
-  await db.log_agent("planner", "plan", JSON.stringify({ window_min, focus_labels, run_dispatcher, run_supervisor }).slice(0, 200),
+  await db.log_agent("planner", "plan", JSON.stringify({ focus_labels, run_dispatcher, run_supervisor }).slice(0, 200),
     JSON.stringify(plan).slice(0, 400), plan.reason, 0);
   return { ok: true, plan };
 });
 
 /** local 대역 — 규칙으로 계획을 낸다. 같은 observe 를 본다. 제출본 아님. */
 async function local_run(agent: Agent, _in: string, ctx: Row): Promise<string> {
-  const obs: Row = ctx.obs ?? (await observe(ctx.window_min));
+  const obs: Row = ctx.obs ?? (await observe());
   const labels = obs.labels as Row[];
   const hot = labels.filter((l) => l.grade === "immediate" || l.grade === "high" || l.spiked).map((l) => l.label as string);
-  const recent = Object.values(obs.counts_15min as Record<string, number>);
-  const burst = labels.some((l) => l.spiked) || recent.some((n) => n >= config.SPIKE_MIN_RECENT);
   const need_doc = (obs.pending_actions as Row[]).length > 0;
   const fresh = Number(obs.new_classified_since_briefing) > 0 || obs.minutes_since_briefing === null ||
     labels.some((l) => l.grade === "immediate");
   const why: string[] = [];
-  if (burst) why.push("최근 15분 유입이 늘어 짧은 창으로 급증을 다시 확인");
   if (need_doc) why.push("요청서가 필요한 유형 있음");
   if (!fresh) why.push("마지막 브리핑 뒤 새 분류 없음");
-  if (!why.length) why.push("특이 변화 없음 — 기본 창으로 점검");
+  if (!why.length) why.push("특이 변화 없음 — 기본 점검");
   await agent.call("plan_cycle", {
-    window_min: burst ? 15 : 60, focus_labels: hot, run_dispatcher: need_doc, run_supervisor: fresh, reason: why.join(" · ") + " (local 규칙)",
+    focus_labels: hot, run_dispatcher: need_doc, run_supervisor: fresh, reason: why.join(" · ") + " (local 규칙)",
   });
   return "계획 수립 (local 규칙)";
 }
@@ -168,23 +149,23 @@ export const planner = new Agent({
   finish_tool: "plan_cycle",             // plan_cycle 성공이 곧 끝 — 보고 문장 호출 1번을 아낀다
 });
 
-/** 기본 계획 (계획이 안 나왔을 때). 고정 순서다: 60분 창 · ③ 부름 · ④ 부름. */
+/** 기본 계획 (계획이 안 나왔을 때). 고정 순서다: ③ 부름 · ④ 부름. */
 export function fallback_plan(obs: Row | null, why: string): Plan {
-  const p = enforce({ window_min: config.DEFAULT_WINDOW_MIN, focus_labels: [], run_dispatcher: true, run_supervisor: true, reason: why }, obs);
+  const p = enforce({ focus_labels: [], run_dispatcher: true, run_supervisor: true, reason: why }, obs);
   p.source = "fallback";
   return p;
 }
 
 /** 이번 주기의 계획을 세워 돌려준다. 계획 에이전트가 실패해도 기본 계획으로 주기는 계속 돈다. */
-export async function run_once(window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Plan> {
+export async function run_once(): Promise<Plan> {
   _STATE.plan = null;
   let obs: Row | null = null;
   try {
-    obs = await observe(window_min);
+    obs = await observe();
     _STATE.obs = obs;
     await planner.run(
       `이번 주기 계획을 세워줘. 상황(건수·등급만, 민원 내용 없음):\n${JSON.stringify(obs)}`,
-      { obs, window_min });
+      { obs });
   } catch (e) {
     await db.log_agent("planner", "error", "", String((e as Error).message ?? e).slice(0, 200), "계획 실패 → 기본 계획");
   }

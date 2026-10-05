@@ -73,17 +73,15 @@ async function startVite(apiPort) {
   return (await until(async () => (await fetch(`${base}/api/control`)).ok, 30000, 300)) ? base : null;
 }
 const inboxCount = (db) => { const h = new DatabaseSync(db, { readOnly: true }); try { return Number(h.prepare("SELECT COUNT(*) c FROM feedback_inbox").get().c); } finally { h.close(); } };
-const newCode = (p) => p + Math.random().toString(36).slice(2);
 
 // ══ reconnect ═════════════════════════════════════════════════════
 async function reconnect() {
   const DB = makeDb("recon.db");
   if (!DB) return die("준비: DB 복사본 만들기");
-  const adminCode = newCode("recon-");
-  let a = await startApi(DB, { ADMIN_CODE: adminCode });
+  let a = await startApi(DB);
   if (!a) return die("준비: webapi 가 안 뜸");
   const apiPort = a.port;
-  const startApiAgain = async () => { a = await startApi(DB, { ADMIN_CODE: adminCode }, apiPort); return !!a; };   // 같은 포트에 다시
+  const startApiAgain = async () => { a = await startApi(DB, {}, apiPort); return !!a; };   // 같은 포트에 다시
   const stopApi = () => { killTree(a?.proc); };
   const total = async () => (await (await fetch(`http://127.0.0.1:${apiPort}/api/control`)).json()).data.total;
   const inbox = () => inboxCount(DB);
@@ -123,10 +121,10 @@ async function reconnect() {
   check("관제: 서버를 다시 켜면 (webapi 기동)", up);
   check("관제: 저절로 '실시간'으로 돌아옴 (새로고침 없이)", !!(await until(async () => (await text("#live")).startsWith("실시간"), 40000)), await text("#live"));
   check("관제: 배너가 사라짐", !!(await until(async () => !(await visible("#conn-banner")), 8000)));
-  // 서버가 없던 사이의 변화를 복구하는지: 다시 붙은 뒤 민원 1건을 지워(관리자 코드는 이 스크립트가 만든 테스트 서버 것) 누적이 바뀌는지 본다.
+  // 서버가 없던 사이의 변화를 복구하는지: 다시 붙은 뒤 민원 1건을 지워누적이 바뀌는지 본다.
   const t0 = await total();
   const victim = (await (await fetch(`http://127.0.0.1:${apiPort}/api/control`)).json()).data.feed[0]?.id;
-  const del = await fetch(`http://127.0.0.1:${apiPort}/api/rpc/delete_feedback`, { method: "POST", headers: { "Content-Type": "application/json", "X-Admin-Code": adminCode }, body: JSON.stringify({ p_id: victim }) });
+  const del = await fetch(`http://127.0.0.1:${apiPort}/api/rpc/delete_feedback`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ p_id: victim }) });
   check("관제: 다시 붙은 뒤 서버에서 일어난 변화가 화면에 반영됨 (실시간 복구)", del.ok && !!(await until(async () => (await text("#app")).includes(`누적 ${t0 - 1}`), 10000)), `누적 ${t0} → ${t0 - 1} 기대`);
 
   // ══ 방문객 화면 ═════════════════════════════════════════════════════
@@ -159,8 +157,7 @@ async function perf() {
   const BUDGET = { controlMedian: 150, controlMax: 600, firstDraw: 2500, redrawWork: 400, feedToScreen: 4000 };
   const DB = makeDb("big.db", [N, M]);
   if (!DB) return die("준비: 큰 DB 복사본 만들기");
-  const CODE = newCode("perf-");
-  const a = await startApi(DB, { ADMIN_CODE: CODE });
+  const a = await startApi(DB);
   if (!a) return die("준비: webapi 가 안 뜸");
   const PA = a.base;
   const base = await startVite(a.port);
@@ -218,7 +215,7 @@ async function perf() {
   const victim = total0.feed[0].id;
   const mA = await metrics();
   const tc = performance.now();
-  const del = await fetch(`${PA}/api/rpc/delete_feedback`, { method: "POST", headers: { "Content-Type": "application/json", "X-Admin-Code": CODE }, body: JSON.stringify({ p_id: victim }) });
+  const del = await fetch(`${PA}/api/rpc/delete_feedback`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ p_id: victim }) });
   const reflected = await until(() => ev(`document.getElementById("app").innerText.includes("누적 ${total0.total - 1}")`), 15000, 50);
   const feedToScreen = performance.now() - tc;
   await sleep(600);
@@ -251,7 +248,7 @@ async function alerts() {
   const at = "2099-01-01T00:00:01";
   for (const [label] of grades) h.prepare("INSERT INTO alert (festival_id, label, kind, detail, created_at, acked) VALUES (1, ?, 'spike', ?, ?, 0)").run(label, `시험용 알림 ${label}`, at);
   h.close();
-  const a = await startApi(DB, { ADMIN_CODE: newCode("alr-") });
+  const a = await startApi(DB);
   if (!a) return die("준비: webapi 가 안 뜸");
   const c = (await (await fetch(`${a.base}/api/control`)).json()).data;
   const labels = (c.alerts as { label: string }[]).map((x) => x.label);
@@ -264,8 +261,8 @@ async function alerts() {
 async function security() {
   const DB = makeDb("sec.db");
   if (!DB) return die("준비: DB 복사본");
-  const A = await startApi(DB, { ADMIN_CODE: newCode("sec-") });
-  const B = await startApi(DB, { ADMIN_CODE: newCode("sec-"), WEBAPI_REQUEST_TIMEOUT: "2" });
+  const A = await startApi(DB);
+  const B = await startApi(DB, { WEBAPI_REQUEST_TIMEOUT: "2" });
   if (!A || !B) return die("준비: webapi 가 안 뜸");
   const JSON_H: Record<string, string> = { "Content-Type": "application/json" };
   // post 는 {status, body}, raw 는 {buf, closed, ms} 를 돌려준다 — 한 변수에 번갈아 담으므로 한 모양으로 묶는다

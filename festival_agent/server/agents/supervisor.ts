@@ -12,8 +12,6 @@ import { round } from "../core/pyfmt.ts";
 
 export type Row = Record<string, any>;
 
-// run_once 가 정한 심각도 창. write_briefing·rank_issues 가 모델이 창을 안 넘겨도 같은 창을 쓰게 한다.
-export const _CURRENT = { window: config.DEFAULT_WINDOW_MIN };
 
 // 사람에게 보이는 문장에 영어 상태값이 나가지 않게 (웹 화면의 조치 상태 이름과 같게)
 const _STATUS_KO: Record<string, string> = { requested: "요청", in_progress: "조치중", done: "완료", superseded: "대체됨" };
@@ -58,7 +56,7 @@ export const SYSTEM = `너는 지역 축제 운영 관제 시스템의 '통합 �
 
 브리핑 작성 규칙
 - 3~4문장, 운영 담당자가 현장에서 읽는다고 전제한다.
-- 첫 문장은 "지금 최우선은 ○○입니다."로 시작한다. ○○ 는 1번 카드의 문제(title)다.
+- 첫 문장은 "지금 최우선은 ○○입니다."로 시작한다. ○○ 는 1번 카드의 문제(title)다. top_label 도 1번 카드의 유형이어야 하고, 아니면 저장이 거부된다.
 - **건수 순위와 심각도 순위가 다르면 그 이유를 반드시 설명한다.** 예: "건수는 주차(52건)가 많지만 조명은 안전
   관련이라 가중치가 적용됐고, 최근 15분간 4건이 집중되어 급증 상태입니다."
 - 이미 조치가 진행 중인 건은 최우선에서 제외하고 그 사실을 한 줄로 알린다.
@@ -76,14 +74,13 @@ export const read_agent_results = tool({
   description: "다른 에이전트들의 최근 산출물(심각도 판정·알림·조치 현황)을 모두 읽는다.",
   properties: {
     since_min: { type: "integer", description: "알림·조치 조회 구간(분). 기본 60" },
-    window_min: { type: "integer", description: "심각도 창(분). ②감시가 쓴 값과 같아야 한다" },
   },
-  params: ["since_min", "window_min"],
+  params: ["since_min"],
   cacheable: true,
-}, async (since_min: number = 60, window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Row> => {
+}, async (since_min: number = 60): Promise<Row> => {
   const cutoff = isoformat(plus(new Date(), -minutes(since_min)));
-  const ranked = await db.ranked(window_min);
-  const counts = await db.label_counts();
+  const ranked = await db.ranked();
+  const counts = await db.label_counts(true);
 
   const conn = await db.connect();
   const alerts = (await conn.execute(
@@ -99,7 +96,6 @@ export const read_agent_results = tool({
       spiked: r.spike.spiked, safety_weighted: r.formula.includes("안전2.0"),   // 점수·계산식은 내부 계산용 — 주지 않는다
     })),
     count_ranking: Object.entries(counts).slice(0, 5).map(([k, v]) => ({ korean: config.LABELS[k] ?? k, count: v })),
-    window_min,
     alerts: alerts.map((a) => ({ ...a })),
     actions: actions.map((a) => ({ ...a })),
     pending_classification: await db.pending_count(),
@@ -111,11 +107,11 @@ export const rank_actions = tool({
   description:
     "우선순위를 계산한다. 심각도 점수에 조치 상태를 반영해 정렬한 결과를 준다. " +
     "이미 조치 중인 건은 순위에서 내려간다.",
-  properties: { window_min: { type: "integer", description: "심각도 창(분)" } },
-  params: ["window_min"],
+  properties: {},
+  params: [],
   cacheable: true,
-}, async (window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Row[]> => {
-  const ranked = await db.ranked(window_min);
+}, async (): Promise<Row[]> => {
+  const ranked = await db.ranked();
   const statuses = await db.latest_action_status();
 
   const out: Row[] = [];
@@ -179,11 +175,23 @@ export const write_briefing = tool({
     throw new Error(`브리핑에 점수·영어 등급 표현 '${leak}' 이 있다. 점수는 사람에게 보이지 않는다 — ` +
       "등급은 한글(즉시·높음·보통·낮음), 근거는 건수와 이유로만 다시 써서 호출하라");
   }
+  // 헤드라인(최우선)은 화면 바로 아래 1번 카드와 같은 대상이어야 한다 — 유형 단위 심각도 1위와 카드 점수 1위가 갈릴 수 있다.
+  // 어긋나면 저장하지 않고 도구 오류로 모델에게 고쳐 쓰게 한다. 본 목록(main)의 1번 카드만 본다 (조치 중인 건은 최우선에서 제외).
+  const first = (await issue_cards.plan()).top[0];
+  if (first && first.grp === "main") {
+    const entry = Array.isArray(issues) ? (issues as Row[]).find((e) => e?.issue_key === first.key) : null;
+    const label_ko = config.LABELS[first.label] ?? first.label;
+    const names = [label_ko, first.zone_id !== null ? first.zone_name : "", entry?.title ?? ""].filter((n) => n);
+    const head = text.split(/[.!?]/)[0];
+    if (top_label !== first.label || !names.some((n) => head.includes(n))) {
+      throw new Error(`브리핑의 최우선이 관제 1번 카드(${label_ko}${first.zone_id !== null ? `, ${first.zone_name}` : ""})와 다르다. ` +
+        "top_label 과 첫 문장을 1번 카드의 유형·구역·문제로 맞춰 다시 호출하라 (다른 유형을 앞세우려면 1번 카드가 왜 뒤인지가 아니라 1번 카드를 먼저 쓴다)");
+    }
+  }
   // 카드 문구는 저장 전에 결정적으로 검사한다 (근거 id·장소 단어·원문 복사·고위험 표현 …).
   // 실패한 카드는 템플릿으로 채우고 재호출은 하지 않는다 — 다음 주기에 다시 시도한다.
-  const win = _CURRENT.window;
-  const res = await issue_cards.apply_entries(issues, llm.is_local() ? "local" : "llm", win);
-  const p = await issue_cards.plan(win);
+  const res = await issue_cards.apply_entries(issues, llm.is_local() ? "local" : "llm");
+  const p = await issue_cards.plan();
   const conn = await db.connect();
   const cur = await conn.execute(
     `INSERT INTO briefing (festival_id, top_label, text, rationale, created_at,
@@ -202,11 +210,11 @@ export const rank_issues = tool({
   description:
     "관제 '지금 조치할 일' 카드의 상위 3장을 준다. 순서·등급은 코드가 이미 정했다. " +
     "needs_text=true 인 카드는 민원 원문(complaints)을 읽고 문구(title·actions)를 정리해야 한다.",
-  properties: { window_min: { type: "integer", description: "심각도 창(분)" } },
-  params: ["window_min"],
+  properties: {},
+  params: [],
   cacheable: true,
-}, async (window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Row> => {
-  const p = await issue_cards.plan(window_min);
+}, async (): Promise<Row> => {
+  const p = await issue_cards.plan();
   const need = new Set<string>(p.need.map((c: Row) => c.key));
   const out: Row[] = [];
   for (const c of p.top as Row[]) {
@@ -231,7 +239,7 @@ export const rank_issues = tool({
     }
     out.push(d);
   }
-  return { window_min, cards: out };
+  return { cards: out };
 });
 
 /** 받침 유무에 따라 조사를 고른다. pair=[받침있음, 받침없음]. */
@@ -262,17 +270,18 @@ export function _why_sentence(sev: Row, top_count: Row): string {
 
 /** local 대역 — 우선순위 1위를 고르고 브리핑 문장을 조립한다. 제출본 아님. */
 async function local_run(agent: Agent, _user_input: string, ctx: Row): Promise<string> {
-  const win = ctx.window_min ?? config.DEFAULT_WINDOW_MIN;
-  const results: Row = await agent.call("read_agent_results", { since_min: ctx.since_min ?? 60, window_min: win });
-  const ranking: Row[] = await agent.call("rank_actions", { window_min: win });
-  await agent.call("rank_issues", { window_min: win });        // 카드 문구는 write_briefing 이 템플릿으로 채운다
+  const results: Row = await agent.call("read_agent_results", { since_min: ctx.since_min ?? 60 });
+  const ranking: Row[] = await agent.call("rank_actions", {});
+  const card_rank: Row = await agent.call("rank_issues", {});        // 카드 문구는 write_briefing 이 템플릿으로 채운다
 
   if (!ranking.length) {
     await agent.call("write_briefing", { top_label: "none", text: "현재 즉시 조치가 필요한 사항은 없습니다.", rationale: "판정 대상 데이터 없음 (local 대역)" });
     return "조치 대상 없음 (local 대역)";
   }
 
-  const top = ranking[0];
+  // 최우선은 1번 카드의 유형이다 (유형 단위 순위가 아니라 화면 바로 아래 카드와 같게). 카드가 없으면 유형 순위 1위.
+  const first_card = (card_rank.cards as Row[])[0];
+  const top = ranking.find((r) => r.label === first_card?.label) ?? ranking[0];
   const sev = (results.severity_ranking as Row[]).find((s) => s.label === top.label);
   const counts: Row[] = results.count_ranking;
 
@@ -300,12 +309,11 @@ export const supervisor = new Agent({
   finish_tool: "write_briefing",     // 1회 실행 = 브리핑 1개
 });
 
-export async function run_once(window_min: number = config.DEFAULT_WINDOW_MIN): Promise<string> {
+export async function run_once(): Promise<string> {
   if (!Object.keys(await db.label_counts()).length) return "";
-  _CURRENT.window = window_min;
   // 상위 카드의 서명(유형·구역·등급·조치 그룹)이 마지막 브리핑 때와 같고 문구를 다시 쓸 카드도 없으면 호출하지 않는다
   // — 민원이 더 들어와도 구조가 같으면 ④의 LLM 호출을 아낀다.
-  const p = await issue_cards.plan(window_min);
+  const p = await issue_cards.plan();
   const conn = await db.connect();
   const last = (await conn.execute("SELECT issue_sig FROM briefing ORDER BY id DESC LIMIT 1")).fetchone();
   if (!p.need.length && last && last.issue_sig !== null && last.issue_sig === p.sig) {
@@ -313,8 +321,6 @@ export async function run_once(window_min: number = config.DEFAULT_WINDOW_MIN): 
     return "";
   }
   return supervisor.run(
-    `지금까지의 판정·알림·조치 상황을 모두 확인하고(심각도 창 ${window_min}분), ` +
-    "운영 담당자가 지금 무엇을 먼저 해야 하는지 브리핑을 작성해줘.",
-    { window_min },
+    "지금까지의 판정·알림·조치 상황을 모두 확인하고, 운영 담당자가 지금 무엇을 먼저 해야 하는지 브리핑을 작성해줘.",
   );
 }

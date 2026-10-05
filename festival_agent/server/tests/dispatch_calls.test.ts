@@ -25,7 +25,7 @@ async function withCards<T>(mods: any[], fn: (db: any) => Promise<T>): Promise<T
   const supervisor = mods[1];
   return withTempDb(async (db) => {
     await seed(db, CROWD);
-    await withLocalBackend(() => supervisor.run_once(60));
+    await withLocalBackend(() => supervisor.run_once());
     return fn(db);
   });
 }
@@ -35,7 +35,7 @@ async function dispatch(mods: any[], script: any[], opts: { mode?: string } = {}
   const seen: Req[] = [];
   llm.set_client(fakeClient(script, seen));
   try {
-    const entry = (await (await import("../core/db.ts")).ranked(60)).filter((r: any) => r.label === "crowd")[0];
+    const entry = (await (await import("../core/db.ts")).ranked()).filter((r: any) => r.label === "crowd")[0];
     await withEnv("LLM_BACKEND", "anthropic", () => withConfig({ DISPATCH_MODE: opts.mode ?? "prefetch" },
       () => dispatcher.run_for("crowd", entry.score, entry.grade, entry.formula, 60)));
   } finally { llm.set_client(null); }
@@ -61,7 +61,7 @@ test("test_조치_에이전트는_모델_호출_1회로_요청서를_만들고_�
     assert.equal(doc.department, "안전총괄과");
     assert.equal(doc.contact, "055-000-0005");
     assert.equal(doc.count, 6);
-    assert.equal(doc.basis, severity.basis_ko(doc.grade, 6, (await (await import("../core/db.ts")).ranked(60)).filter((r: any) => r.label === "crowd")[0].formula));
+    assert.equal(doc.basis, severity.basis_ko(doc.grade, 6, (await (await import("../core/db.ts")).ranked()).filter((r: any) => r.label === "crowd")[0].formula));
     assert.ok(!("score" in doc) && !("formula" in doc));
     // 도구 호출 기록은 그대로 남는다 (부서 조회·인용 수집·축제 정보 = 외부 API 자리) — 코드가 미리 조회했다는 표시와 함께
     const logs = await all(db, "SELECT action, reasoning FROM agent_log WHERE agent='dispatcher'");
@@ -94,7 +94,7 @@ test("test_모델이_응답하지_않아도_요청서는_규칙으로_만들어�
     const [, , llm] = m;
     llm.set_client({ messages: { create: async () => { throw new Error("네트워크 오류"); } } });
     try {
-      const entry = (await (await import("../core/db.ts")).ranked(60)).filter((r: any) => r.label === "crowd")[0];
+      const entry = (await (await import("../core/db.ts")).ranked()).filter((r: any) => r.label === "crowd")[0];
       await withEnv("LLM_BACKEND", "anthropic", () => m[0].run_for("crowd", entry.score, entry.grade, entry.formula, 60));
     } finally { llm.set_client(null); }
     const row = await one(db, "SELECT doc_json FROM action_request WHERE label='crowd'");

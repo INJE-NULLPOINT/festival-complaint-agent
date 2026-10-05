@@ -8,7 +8,7 @@ type Item = [number | null, string, number, number, boolean, string];
 const safety = (n: number, text = (i: number) => `유등터널 난간이 흔들려서 위험해요 ${i}번째`): Item[] =>
   Array.from({ length: n }, (_, i): Item => [4, "safety", 8 - i, -1.0, true, text(i)]);   // 강한 부정(-1.0) — 예전에는 1건도 80 을 넘었다
 
-const gradeOf = async (db: any, label: string, win = 60) => (await db.ranked(win)).find((r: any) => r.label === label);
+const gradeOf = async (db: any, label: string) => (await db.ranked()).find((r: any) => r.label === label);
 
 test("test_일반_안전_1_2건은_높음까지_3건_이상은_즉시", async (t) => {
   const m = await need(t, "core/severity.ts"); if (!m) return;
@@ -91,14 +91,14 @@ test("test_역전_시드는_그대로_안전_즉시_건수1위_주차는_즉시_
   for (const r of parseCsv(readFileSync(SEED, "utf8"))) {
     const c = await rules.classify(r.text);
     if (c.confidence < config.REVIEW_CONFIDENCE) continue;
-    rows.push({ label: c.label, sentiment: c.sentiment, is_safety: c.is_safety ? 1 : 0, posted_at: r.posted_at, ingested_at: "", raw_text: r.text });
+    rows.push({ label: c.label, sentiment: c.sentiment, is_safety: c.is_safety ? 1 : 0, posted_at: r.posted_at, ingested_at: "", zone_id: r.zone, raw_text: r.text });
   }
   const ref = new Date(rows.map((r) => r.posted_at).sort().at(-1)!);
   const iso = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 19);
   const cut = iso(new Date(ref.getTime() - 5760 * 60000));
   const out = S.rank_labels(rows.filter((r) => r.posted_at >= cut), { unhandled_fn: () => true, ref });
   const by = Object.fromEntries(out.map((r: any) => [r.label, r]));
-  assert.ok(out[0].label === "safety" && out[0].grade === "immediate");
+  assert.ok(out[0].label === "safety" && out[0].grade === "high");     // S-04 는 같은 구역 1시간 3건 — 4일에 흩어진 시드의 안전 11건은 높음
   assert.equal(by.parking.freq, Math.max(...out.map((r: any) => r.freq)));          // 건수 1위는 주차
   assert.notEqual(by.parking.grade, "immediate");
 });

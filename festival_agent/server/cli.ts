@@ -56,9 +56,8 @@ async function _backend_line(): Promise<string> {
   return green(`  백엔드 anthropic (${config.MODEL})`);
 }
 
-async function ranked_now(window: number | null = null): Promise<[any[], number]> {
-  const win = window || config.DEFAULT_WINDOW_MIN;
-  return [await db.ranked(win), (await db.window_rows(win)).length];
+async function ranked_now(): Promise<[any[], number]> {
+  return [await db.ranked(), (await db.open_rows()).length];
 }
 
 const sumValues = (o: Record<string, number>) => Object.values(o).reduce((a, b) => a + b, 0);
@@ -71,19 +70,17 @@ async function cmd_status(args: Args): Promise<void> {
   const brief = (await conn.execute("SELECT * FROM briefing ORDER BY id DESC LIMIT 1")).fetchone();
   const alerts = (await conn.execute("SELECT * FROM alert WHERE acked=0 ORDER BY id DESC LIMIT 5")).fetchall();
 
-  const win = args.window || config.DEFAULT_WINDOW_MIN;
-  const total_counts = await db.label_counts();          // 누적 (전 기간)
-  const counts = await db.label_counts(win);             // 창 기준 — 심각도와 같은 모집단
-  const [ranked, win_total] = await ranked_now(win);
+  const total_counts = await db.label_counts();          // 누적 (처리된 것 포함)
+  const counts = await db.label_counts(true);            // 처리 안 된 민원 — 심각도와 같은 모집단
+  const [ranked, open_total] = await ranked_now();
   const pending = await db.pending_count();
   const reviewN = await db.review_count();
 
   print(`\n${bold(fest ? fest.name : "축제")}   `
     + dim(`누적 ${sumValues(total_counts) + pending}건 · 분류완료 ${sumValues(total_counts)} · 대기 ${pending}` + (reviewN ? ` · 확인필요 ${reviewN}` : "")));
   const dn = await db.data_now();
-  print(dim(`  데이터 기준 ${String(dn.getMonth() + 1).padStart(2, "0")}-${String(dn.getDate()).padStart(2, "0")} ${String(dn.getHours()).padStart(2, "0")}:${String(dn.getMinutes()).padStart(2, "0")} · 창 ${win}분 (${win_total}건)`));
+  print(dim(`  데이터 기준 ${String(dn.getMonth() + 1).padStart(2, "0")}-${String(dn.getDate()).padStart(2, "0")} ${String(dn.getHours()).padStart(2, "0")}:${String(dn.getMinutes()).padStart(2, "0")} · 처리 안 된 민원 ${open_total}건`));
   print(await _backend_line());
-  if (win_total < sumValues(total_counts) * 0.3) print(dim(`  창 밖 데이터가 많습니다.  --window ${win * 24}  처럼 넓혀 보세요`));
 
   const prog = await replay.progress();
   if (prog && prog.active) print(dim(`  리플레이 ${fixed(prog.speed, 0)}배속 · ${prog.cursor}/${prog.total} · 시뮬 ${prog.sim_now}`));
@@ -109,7 +106,7 @@ async function cmd_status(args: Args): Promise<void> {
   }
 
   // 두 순위
-  rule(`건수 순위  vs  심각도 순위  (최근 ${win}분)`);
+  rule(`건수 순위  vs  심각도 순위  (처리 안 된 민원)`);
   print(`  ${ljust("", 4)}${ljust("건수", 22)}${ljust("", 4)}${ljust("심각도", 28)}`);
   const cl = Object.entries(counts);
   for (let i = 0; i < Math.max(cl.length, ranked.length); i++) {
@@ -259,28 +256,29 @@ async function cmd_classify(args: Args): Promise<void> {
   print(dim(`  남은 대기 ${await db.pending_count()}건`));
 }
 
-async function cmd_monitor(args: Args): Promise<void> {
+async function cmd_monitor(): Promise<void> {
   const { run_once } = await import("./agents/monitor.ts");
   print(dim("②심각도·감시 에이전트 실행…"));
-  print(`  ${(await run_once(args.window || config.DEFAULT_WINDOW_MIN)) || "(데이터 없음)"}`);
+  print(`  ${(await run_once()) || "(데이터 없음)"}`);
 }
 
 async function cmd_dispatch(args: Args): Promise<void> {
   const { pending_labels, run_for } = await import("./agents/dispatcher.ts");
-  const win = args.window || config.DEFAULT_WINDOW_MIN;
   let targets = await pending_labels();
   if (args.label) targets = targets.filter((t: any) => t.label === args.label);
   if (!targets.length) { print(dim("조치요청서가 필요한 유형이 없습니다.")); return; }
   for (const t of targets.slice(0, args.limit)) {
     print(dim(`③조치 에이전트 실행 — ${config.LABELS[t.label] ?? t.label}…`));
-    print(`  ${await run_for(t.label, t.score, t.grade, t.formula, win)}`);
+    print(`  ${await run_for(t.label, t.score, t.grade, t.formula)}`);
   }
 }
 
-async function cmd_brief(args: Args): Promise<void> {
+async function cmd_brief(): Promise<void> {
   const { run_once } = await import("./agents/supervisor.ts");
   print(dim("④통합 에이전트 실행…"));
-  print(`  ${(await run_once(args.window || config.DEFAULT_WINDOW_MIN)) || "(데이터 없음)"}`);
+  const out = await run_once();
+  // 빈 결과는 두 경우다: 분류된 민원이 없음 / 카드 구성이 지난 브리핑과 같아 모델 호출을 생략함 (agent_log 'skip')
+  print(`  ${out || (Object.keys(await db.label_counts()).length ? "(변화 없음 — 카드 구성이 지난 브리핑과 같아 호출을 생략했습니다)" : "(데이터 없음)")}`);
 }
 
 async function cmd_cycle(args: Args): Promise<void> {
@@ -288,9 +286,9 @@ async function cmd_cycle(args: Args): Promise<void> {
   const injected = await replay.step();
   if (injected) print(dim(`리플레이 ${injected}건 투입`));
   await cmd_classify(args);
-  await cmd_monitor(args);
+  await cmd_monitor();
   await cmd_dispatch(args);
-  await cmd_brief(args);
+  await cmd_brief();
 }
 
 // ── replay ────────────────────────────────────────────────────────
@@ -416,7 +414,7 @@ export async function cmd_db_restore(args: Args): Promise<void> {
     if (!(tb in want)) continue;
     print(`  ${ljust(tb, 18)}${rjust(now[tb] ?? "-", 7)}${rjust(want[tb], 9)}`);
   }
-  print(yellow("  위 테이블의 지금 내용은 전부 지워지고 파일 내용으로 바뀝니다. (operator_secret 은 건드리지 않습니다)"));
+  print(yellow("  위 테이블의 지금 내용은 전부 지워지고 파일 내용으로 바뀝니다. (source_key 는 건드리지 않습니다)"));
   print(dim("  복원 전에 워커·웹 서버를 멈추는 것이 안전합니다 (run_all_servers 를 끄세요)."));
 
   if (!(args.yes && !live)) {           // --yes 는 운영이 아닐 때만 통한다
@@ -498,18 +496,6 @@ async function cmd_reset(args: Args): Promise<void> {
 }
 
 // ── demo ──────────────────────────────────────────────────────────
-/** 시드 CSV가 몇 분치인지. 창 기본값을 데이터에 맞추는 데 쓴다. */
-function _seed_span_minutes(p: string): number {
-  const text = fs.readFileSync(p, "utf-8").replace(/^﻿/, "");
-  const lines = text.split(/\r?\n/).filter(Boolean);
-  const head = parseCsvLine(lines[0]);
-  const idx = head.indexOf("posted_at");
-  const ts = lines.slice(1).map((l) => parseCsvLine(l)[idx]).filter(Boolean);
-  if (ts.length < 2) return config.DEFAULT_WINDOW_MIN;
-  const ms = ts.map((t) => Date.parse(t));
-  const lo = Math.min(...ms), hi = Math.max(...ms);
-  return Math.max(config.DEFAULT_WINDOW_MIN, Math.floor((hi - lo) / 1000 / 60) + 60);
-}
 function parseCsvLine(line: string): string[] {
   const out: string[] = []; let cur = ""; let q = false;
   for (let i = 0; i < line.length; i++) {
@@ -546,16 +532,13 @@ async function cmd_demo(args: Args): Promise<void> {
   }
 
   print(bold("\n[3/5] 심각도 판정"));
-  const span = _seed_span_minutes(seed);
-  const win = args.window || span;
-  print(dim(`  시드가 ${Math.floor(Math.floor(span / 60) / 24)}일치라 창을 ${win}분으로 잡습니다 (실운영 기본값은 ${config.DEFAULT_WINDOW_MIN}분)`));
-  const [ranked] = await ranked_now(win);
+  const [ranked] = await ranked_now();
   for (const r of ranked.slice(0, 5)) {
     const col = GRADE_COLOR[r.grade] ?? ident;
     print(col(`  ${ljust(config.LABELS[r.label] ?? r.label, 10)}${rjust(num(r.score), 6)}  ${ljust(r.grade, 10)}${rjust(r.freq, 4)}건`));
   }
   if (ranked.length) {
-    const counts = await db.label_counts(win);
+    const counts = await db.label_counts(true);
     const top_count = Object.keys(counts).reduce((a, b) => (counts[b] > counts[a] ? b : a));
     if (top_count !== ranked[0].label) {
       print(green(`\n  ★ 역전: 건수 1위는 ${config.LABELS[top_count]}(${counts[top_count]}건)이지만, 심각도 1위는 ${config.LABELS[ranked[0].label]}(${ranked[0].freq}건)`));
@@ -567,7 +550,7 @@ async function cmd_demo(args: Args): Promise<void> {
   await cmd_dispatch({ label: null, limit: 1 });
 
   print(bold("\n[5/5] 통합 브리핑"));
-  await cmd_brief(args);
+  await cmd_brief();
   print(dim("\n완료.  node server/cli.ts status  로 확인"));
 }
 
@@ -586,7 +569,7 @@ function pyRound(x: number): number {
   return f % 2 === 0 ? f : f + 1;
 }
 
-async function _frame(win: number, drive: boolean): Promise<string> {
+async function _frame(drive: boolean): Promise<string> {
   // 한 프레임을 문자열로 만든다. watch 와 스냅샷이 같은 것을 쓴다.
   const out: string[] = [];
   const A = (s: string) => out.push(s);
@@ -598,8 +581,8 @@ async function _frame(win: number, drive: boolean): Promise<string> {
     }
   }
 
-  const counts = await db.label_counts(win);
-  const ranked = (await ranked_now(win))[0];
+  const counts = await db.label_counts(true);
+  const ranked = (await ranked_now())[0];
   const pending = await db.pending_count();
   const prog = await replay.progress();
 
@@ -679,13 +662,12 @@ async function _frame(win: number, drive: boolean): Promise<string> {
 
 async function cmd_watch(args: Args): Promise<void> {
   // 실시간 모니터. 화면을 지우고 다시 그린다.
-  const win = args.window || config.DEFAULT_WINDOW_MIN;
-  if (args.once) { print(await _frame(win, args.drive)); return; }
+  if (args.once) { print(await _frame(args.drive)); return; }
 
   print(dim("Ctrl+C 로 종료"));
   process.on("SIGINT", () => { print("\n종료"); process.exit(0); });
   for (;;) {
-    const frame = await _frame(win, args.drive);
+    const frame = await _frame(args.drive);
     // 커서를 원점으로 옮기고 화면을 지운다 (깜빡임 없이 다시 그리기)
     process.stdout.write("\x1b[H\x1b[J");
     process.stdout.write(frame + "\n");
@@ -729,7 +711,7 @@ async function cmd_todo(args: Args): Promise<void> {
 }
 
 // ── main ──────────────────────────────────────────────────────────
-// 명령별 옵션 (argparse 의 서브파서와 같은 이름·기본값). 전역 --window 는 명령 앞에 둔다.
+// 명령별 옵션 (argparse 의 서브파서와 같은 이름·기본값).
 type OptSpec = Record<string, { type: "string" | "boolean"; default?: string | boolean }>;
 const COMMANDS: Record<string, { help: string; options: OptSpec; positionals?: string[]; run: (a: Args) => Promise<void> }> = {
   status: { help: "현재 상태", options: {}, run: cmd_status },
@@ -745,33 +727,29 @@ const COMMANDS: Record<string, { help: string; options: OptSpec; positionals?: s
   replay: { help: "리플레이 제어", options: { file: { type: "string", default: "dev_sample.csv" }, speed: { type: "string", default: "60.0" } }, positionals: ["action"], run: cmd_replay },
   db: { help: "DB 조회", options: { limit: { type: "string", default: "20" }, "live-db": { type: "boolean" }, yes: { type: "boolean" } }, positionals: ["what?", "target?"], run: cmd_db },
   reset: { help: "초기화", options: { all: { type: "boolean" } }, run: cmd_reset },
-  demo: { help: "E2E 자동 실행", options: { file: { type: "string", default: "dev_sample.csv" }, window: { type: "string" }, batch: { type: "string", default: "20" }, label: { type: "string" }, limit: { type: "string", default: "1" } }, run: cmd_demo },
+  demo: { help: "E2E 자동 실행", options: { file: { type: "string", default: "dev_sample.csv" }, batch: { type: "string", default: "20" }, label: { type: "string" }, limit: { type: "string", default: "1" } }, run: cmd_demo },
 };
-const NUMERIC = new Set(["interval", "batch", "limit", "speed", "window"]);
+const NUMERIC = new Set(["interval", "batch", "limit", "speed"]);
 
 function usage(): void {
-  console.error("사용: node server/cli.ts [--window 분] <명령> [옵션]\n");
+  console.error("사용: node server/cli.ts <명령> [옵션]\n");
   for (const [k, v] of Object.entries(COMMANDS)) console.error(`  ${ljust(k, 10)}${v.help}`);
 }
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
-  let window: number | undefined;
   let i = 0;
-  while (i < argv.length && argv[i].startsWith("--")) {
-    if (argv[i] === "--window") { window = Number(argv[i + 1]); i += 2; } else break;
-  }
   const cmdName = argv[i];
   const spec = COMMANDS[cmdName];
   if (!spec) { usage(); process.exit(2); }
   const { values, positionals } = parseArgs({ args: argv.slice(i + 1), options: spec.options as any, allowPositionals: true });
-  const args: Args = { window };
+  const args: Args = {};
   for (const [k, sv] of Object.entries(spec.options)) {
     let v: any = (values as Args)[k] ?? sv.default;
     if (v !== undefined && NUMERIC.has(k) && sv.type === "string") v = Number(v);
     if (v === undefined && sv.type === "boolean") v = false;
     if (v === undefined) v = null;
-    args[k === "window" ? "window" : k] = k === "window" && v === null ? window : v;   // demo 의 --window 는 명령 뒤에 온 것이 우선
+    args[k] = v;
   }
   (spec.positionals ?? []).forEach((name, n) => {
     const key = name.replace("?", "");

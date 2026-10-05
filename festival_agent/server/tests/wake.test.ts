@@ -68,3 +68,21 @@ test("test_접수_알림_LISTEN_이_안_되면_조용히_폴링으로_돌아간�
     await l.stop();                                     // 다시 붙으려는 타이머도 멈춘다
   });
 });
+
+test("recompute_now: 워커 시작 때 새 민원 없이도 심각도 스냅샷과 카드를 다시 계산한다 (조치 완료 반영 포함)", async (t) => {
+  const m = await need(t, "worker.ts", "core/db.ts"); if (!m) return;
+  const [worker, db] = m;
+  const { withTempDb, withLocalBackend, seed, all, run } = await import("./_helpers.ts");
+  await withLocalBackend(async () => withTempDb(async (conn) => {
+    await seed(conn, [[1, "parking", 5, -0.5, false, "주차장이 만차예요 하나"], [2, "safety", 4, -0.8, true, "계단 난간이 흔들려서 위험해요"]]);
+    assert.equal((await all(conn, "SELECT * FROM severity")).length, 0);          // 아직 계산 안 됨 (워커가 막 켜진 상태)
+    await worker.recompute_now();
+    const labels = async () => (await all(conn, `SELECT label FROM severity WHERE as_of=(SELECT MAX(as_of) FROM severity)`)).map((r: any) => r.label).sort();
+    assert.deepEqual(await labels(), ["parking", "safety"]);
+    assert.ok((await all(conn, "SELECT * FROM issue WHERE active=1 AND label='safety'")).length === 1);       // 카드도 계산됨
+    await run(conn, "INSERT INTO action_request (label, department, status, created_at, closed_at) VALUES ('parking','교통과','done',?,?)", [await db.now(), "2999-01-01T00:00:00"]);
+    await new Promise((r) => setTimeout(r, 1100));                                  // 스냅샷 시각(초)이 달라지게
+    await worker.recompute_now();                                                   // 새 민원 없음 — 재계산만으로 완료된 유형이 빠진다
+    assert.deepEqual(await labels(), ["safety"]);
+  }));
+});

@@ -1,7 +1,7 @@
 // D5-90 운영자 설정 — 축제 이름·기간, 구역(이름 변경·숨김), 유형별 담당 부서·연락처. 임시 SQLite.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { need, withTempDb, withAdminCode, seed, rejects, all, one } from "./_helpers.ts";
+import { need, withTempDb, seed, rejects, all, one } from "./_helpers.ts";
 
 test("test_담당_부서_연락처를_바꾸면_카드와_조치_도구가_저장값을_쓰고_다시_시작해도_안_되돌아간다", async (t) => {
   const m = await need(t, "webapi.ts", "core/settings.ts", "core/issues.ts", "agents/dispatcher.ts"); if (!m) return;
@@ -15,7 +15,7 @@ test("test_담당_부서_연락처를_바꾸면_카드와_조치_도구가_저�
     assert.equal(s0.departments.length, 6);
     // 저장 → 카드·도구가 저장값, 예시 표시는 사라짐
     await webapi.save_department("safety", "재난안전과", "055-749-1234");
-    const card = (await issues.build_cards(60)).find((c: any) => c.label === "safety");
+    const card = (await issues.build_cards()).find((c: any) => c.label === "safety");
     assert.deepEqual([card.department, card.contact], ["재난안전과", "055-749-1234"]);
     assert.equal((await dispatcher.get_department.fn("safety")).department, "재난안전과");
     const d1 = ((await webapi.get_settings()) as any).departments.find((d: any) => d.label === "safety");
@@ -90,21 +90,14 @@ test("test_축제_이름_기간을_바꾸면_공개_이름과_요청서가_저�
   });
 });
 
-test("test_설정_저장은_운영자_코드가_있어야_하고_읽기는_공개다", async (t) => {
-  const m = await need(t, "webapi.ts", "core/admin.ts"); if (!m) return;
-  const [webapi, admin] = m;
-  await withTempDb(async () => withAdminCode("settings-code-1", async () => {
-    for (const [name, args] of [["save_festival", { p_name: "a", p_region: "b", p_start_date: "2026-10-01", p_end_date: "2026-10-02" }], ["add_zone", { p_name: "x" }],
-      ["rename_zone", { p_id: 1, p_name: "y" }], ["set_zone_hidden", { p_id: 1, p_hidden: true }], ["save_department", { p_label: "parking", p_department: "과", p_contact: "055-123-4567" }]] as const) {
-      assert.ok(webapi.ADMIN_RPC.has(name), name);
-      for (const bad of [null, "", "wrong"]) {
-        await rejects(() => webapi.call_rpc(name, args, bad, `s-${name}`), (e) => assert.ok(e instanceof admin.AdminError && e.status === 401, `${name} ${bad}`));
-      }
-    }
-    const ok = (await webapi.call_rpc("add_zone", { p_name: "코드로 추가" }, "settings-code-1", "s-ok")) as any;     // 맞는 코드면 된다
+test("test_설정_저장과_읽기는_코드_없이_된다", async (t) => {
+  const m = await need(t, "webapi.ts"); if (!m) return;
+  const [webapi] = m;
+  await withTempDb(async () => {
+    const ok = (await webapi.call_rpc("add_zone", { p_name: "코드 없이 추가" }, "s-ok")) as any;
     assert.ok(ok.id > 0);
-    assert.ok(!webapi.ADMIN_RPC.has("get_settings"));                                                              // 읽기는 코드 없이
-    const s = (await webapi.call_rpc("get_settings", {}, null, "s2")) as any;
+    await rejects(() => webapi.call_rpc("add_zone", { p_name: "x", p_code: "무시" }, "s-x"), (e) => assert.ok(String(e.message).includes("unexpected keyword")));
+    const s = (await webapi.call_rpc("get_settings", {}, "s2")) as any;
     assert.ok(s.festival && s.zones.length && s.departments.length === 6);
-  }));
+  });
 });

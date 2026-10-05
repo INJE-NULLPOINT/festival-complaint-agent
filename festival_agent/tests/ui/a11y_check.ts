@@ -7,8 +7,7 @@
 //
 // 사용 (festival_agent 폴더에서):
 //   node tests/ui/a11y_check.ts <base> <테스트DB> [--scheme=light|dark] [--shots=<폴더>] [--only=이름,이름] [--json=<파일>]
-// 테스트 DB 에만 쓴다 (확인 필요·삭제·코드 창 장면을 만든다). 운영 서버·DB 에는 돌리지 말 것.
-// 테스트용 운영자 코드는 test-code (webapi 를 ADMIN_CODE=test-code 로 띄운다).
+// 테스트 DB 에만 쓴다 (확인 필요·삭제 장면을 만든다). 운영 서버·DB 에는 돌리지 말 것.
 import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { cpus, tmpdir } from "node:os";
@@ -200,7 +199,7 @@ async function nameAudit() {
 const Z = "%EC%9C%A0%EB%93%B1%ED%84%B0%EB%84%90";
 const clickAll = (sel) => ev(`document.querySelectorAll(${JSON.stringify(sel)}).forEach((e) => e.click())`);
 interface Scene {
-  name: string; url: string; ready: string; prep?: () => Promise<void>; noCode?: boolean; toast?: boolean;
+  name: string; url: string; ready: string; prep?: () => Promise<void>; toast?: boolean;
   phone?: boolean; seed?: string; init?: string; expect?: string[]; alertRole?: boolean;
 }
 const SCENES: Scene[] = [
@@ -213,8 +212,6 @@ const SCENES: Scene[] = [
   { name: "접수-모달", url: `/?v=qr&zone=${Z}`, ready: `!!document.querySelector("#rf")`, prep: async () => {
       await ev(`(() => { const t = document.querySelector("textarea"); t.value = "유등터널 입구 조명이 꺼져서 어두워요"; t.dispatchEvent(new Event("input")); document.querySelector("#rf button").click(); })()`);
       await waitFor(() => ev(`!!document.querySelector(".rp-modal[open]")`)); await sleep(500); } },
-  { name: "코드창", url: "/#control", ready: `!!document.querySelector(".feed li .del")`, noCode: true, prep: async () => {
-      await ev(`document.querySelector(".feed li[data-fid] .del").click()`); await waitFor(() => ev(`!!document.querySelector(".adm-overlay")`)); await sleep(400); } },
   { name: "토스트", url: "/#control", ready: `!!document.querySelector(".feed li .del")`, prep: async () => {
       await ev(`document.querySelector(".feed li[data-fid] .del").click()`); await waitFor(() => ev(`!!document.querySelector("#toasts .toast-act")`)); await sleep(300); }, toast: true },
 ];
@@ -236,7 +233,6 @@ if (EMPTY) SCENES.splice(0, SCENES.length, ...EMPTY_SCENES);
 
 await send("Page.enable");
 await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: SCHEME }] });
-await send("Page.addScriptToEvaluateOnNewDocument", { source: `try { sessionStorage.setItem("festival_admin_code", "test-code"); } catch (e) {}` });
 
 if (EMPTY) execFileSync(process.execPath, [join(HERE, "seed_states.ts"), db, "clear"], { stdio: "ignore" });
 const findings = [];
@@ -251,12 +247,10 @@ for (const sc of SCENES) {
   if (sc.seed) execFileSync(process.execPath, [join(HERE, "seed_states.ts"), db, sc.seed], { stdio: "ignore" });   // 테스트 DB 에만
   let initId = null;
   if (sc.init) initId = (await send("Page.addScriptToEvaluateOnNewDocument", { source: sc.init })).identifier;
-  await send("Page.navigate", { url: "about:blank" });   // 같은 주소로 다시 가면 새로 로드되지 않아 앞 장면(코드 창 등)이 남는다 — 매번 빈 페이지를 거친다
+  await send("Page.navigate", { url: "about:blank" });   // 같은 주소로 다시 가면 새로 로드되지 않아 앞 장면(토스트 등)이 남는다 — 매번 빈 페이지를 거친다
   await send("Page.navigate", { url: base + sc.url });
-  if (sc.noCode) await ev(`sessionStorage.removeItem("festival_admin_code")`);
   await waitFor(() => ev(sc.ready), 20000);
   await sleep(700);
-  if (sc.noCode) await ev(`sessionStorage.removeItem("festival_admin_code")`);
   await sc.prep?.();
   const tag = `${sc.name}·${SCHEME}`;
   // 토스트는 5초만 보인다 — 아래 대비·접근성 트리 검사가 오래 걸려도 사라지기 전에 먼저 읽어 둔다
@@ -276,20 +270,20 @@ for (const sc of SCENES) {
   // 2. 이름 · 제목 · id
   const na = await nameAudit();
   note(tag, "접근 가능한 이름 (버튼·링크·입력·이미지)", na.bad.length === 0, na.bad.slice(0, 4).join(" / "));
-  // 모달·코드 창이 떠 있으면 뒤 화면은 접근성 트리에서 빠진다(그게 정상) — 그때는 h1 을 요구하지 않는다
-  if (!["접수-모달", "코드창"].includes(sc.name)) note(tag, "h1 이 정확히 하나", na.h1 === 1, `h1 ${na.h1}개`);
+  // 모달이 떠 있으면 뒤 화면은 접근성 트리에서 빠진다(그게 정상) — 그때는 h1 을 요구하지 않는다
+  if (sc.name !== "접수-모달") note(tag, "h1 이 정확히 하나", na.h1 === 1, `h1 ${na.h1}개`);
   note(tag, "id 중복 없음", na.dup.length === 0, na.dup.join(","));
   // 3. 알림 영역
   if (sc.toast) note(tag, "토스트 알림 영역 (aria-live + 토스트 role)", toastState.live === "polite" && (toastState.role === "status" || toastState.role === "alert"), JSON.stringify(toastState));
-  // 4. 키보드 (토스트·코드창은 타이머/모달이라 건너뜀)
+  // 4. 키보드 (토스트는 타이머라 건너뜀)
   if (!sc.toast) {
     const kb = await keyboardAudit();
-    note(tag, `키보드로 모두 닿음 (${kb.reached}/${kb.total})`, kb.unreached.length === 0 || sc.name === "접수-모달" || sc.name === "코드창", kb.unreached.slice(0, 5).join(" / "));
+    note(tag, `키보드로 모두 닿음 (${kb.reached}/${kb.total})`, kb.unreached.length === 0 || sc.name === "접수-모달", kb.unreached.slice(0, 5).join(" / "));
     note(tag, "포커스 표시가 보임", kb.noRing.length === 0, kb.noRing.slice(0, 5).join(" / "));
     note(tag, "양수 tabindex 없음", kb.positive === 0);
   }
   // 5. 확대 200% (폭 절반)
-  if (!sc.toast && sc.name !== "코드창" && sc.name !== "접수-모달") {
+  if (!sc.toast && sc.name !== "접수-모달") {
     const half = Math.round(W / 2);
     await send("Emulation.setDeviceMetricsOverride", { width: half, height: 900, deviceScaleFactor: 1, mobile: false });
     await sleep(500);

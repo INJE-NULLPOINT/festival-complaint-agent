@@ -10,7 +10,7 @@ const cfgOf = (m: any) => m.config ?? m;
 const J = (s: string) => JSON.parse(s);
 const pyRound = (x: number, n: number) => Math.round(x * 10 ** n) / 10 ** n;
 
-test("test_카드_안전3건이_세구역에_흩어져도_세카드_모두_즉시", async (t) => {
+test("test_카드_안전3건이_세구역에_흩어지면_구역마다_1건이라_세카드_모두_높음", async (t) => {
   if (!(await need(t, "core/issues.ts", "core/db.ts"))) return;
   await withTempDb(async (db) => {
     await seed(db, [[1, "safety", 9, -0.8, true, "계단 조명이 꺼져 있어요"],
@@ -18,7 +18,8 @@ test("test_카드_안전3건이_세구역에_흩어져도_세카드_모두_즉�
                     [3, "safety", 3, -0.8, true, "바닥이 미끄러워서 넘어졌어요"]]);
     const cs = await cards();
     assert.equal(cs.length, 3);
-    assert.deepEqual(new Set(cs.map((c: any) => c.grade)), new Set(["immediate"]));
+    // S-04 는 같은 구역의 안전 민원 3건부터 — 구역마다 1건씩이면 즉시가 아니라 높음 (D5-86)
+    assert.deepEqual(new Set(cs.map((c: any) => c.grade)), new Set(["high"]));
     assert.ok(cs.every((c: any) => c.conc === pyRound(0.5 + 0.5 / 3, 2)));
   });
 });
@@ -50,7 +51,7 @@ test("test_카드_같은구역_혼잡과_안전은_합치지_않는다", async (
   });
 });
 
-test("test_카드_조치중은_접히고_완료뒤_새민원이면_본목록_복귀", async (t) => {
+test("test_카드_조치중은_접히고_완료되면_빠지고_완료뒤_새민원이면_본목록_복귀", async (t) => {
   if (!(await need(t, "core/issues.ts"))) return;
   await withTempDb(async (db) => {
     await seed(db, [[4, "crowd", 9, -0.7, true, "터널 입구에 사람이 몰려 밀려요"],
@@ -67,11 +68,11 @@ test("test_카드_조치중은_접히고_완료뒤_새민원이면_본목록_복
     assert.equal((await cards())[0].label, "parking");
     await run(db, "UPDATE feedback SET ingested_at='2026-09-30T10:00:00'");
     await run(db, "UPDATE action_request SET status='done', closed_at='2026-09-30T11:00:00' WHERE label='crowd'");
-    assert.equal(Object.fromEntries((await cards()).map((c: any) => [c.label, c])).crowd.grp, "done");
+    assert.equal((await cards()).some((c: any) => c.label === "crowd"), false);            // 완료 시각 이전 민원은 처리된 것 — 카드에서 빠진다
     const ids = await seed(db, [[4, "crowd", 0, -0.7, true, "또 사람이 몰려서 밀려요"]]);
     await run(db, "UPDATE feedback SET ingested_at='2026-09-30T12:00:00' WHERE id=?", [ids[0]]);
     const back = Object.fromEntries((await cards()).map((c: any) => [c.label, c])).crowd;
-    assert.ok(back.grp === "main" && back.recurred === 1);
+    assert.ok(back.grp === "main" && back.recurred === 1 && back.freq === 1);               // 완료 뒤 새 민원만 다시 센다
   });
 });
 
@@ -162,17 +163,17 @@ test("test_카드_문구는_60초_간격_서명이_바뀌면_즉시", async (t) 
     const orig = sv.supervisor.run;
     sv.supervisor.run = async (...a: any[]) => { calls.push(1); return orig.apply(sv.supervisor, a); };
     try {
-      await sv.run_once(60);
+      await sv.run_once();
       assert.equal(calls.length, 1);
-      assert.ok((await sv.run_once(60)) === "" && calls.length === 1);
+      assert.ok((await sv.run_once()) === "" && calls.length === 1);
       await seed(db, [[4, "crowd", 0, -0.7, true, "또 사람이 몰려서 밀려요"]]);
-      assert.ok((await sv.run_once(60)) === "" && calls.length === 1);
+      assert.ok((await sv.run_once()) === "" && calls.length === 1);
       await run(db, "UPDATE issue SET gen_at=?", [iso(ago(new Date(), 2))]);
-      await sv.run_once(60);
+      await sv.run_once();
       assert.equal(calls.length, 2);
       const before = calls.length;
       await run(db, "INSERT INTO action_request (label, department, status, created_at) VALUES ('crowd', '안전총괄과', 'in_progress', ?)", [await db.now()]);
-      await sv.run_once(60);
+      await sv.run_once();
       assert.equal(calls.length, before + 1);
       const row = (await issues.stored())["crowd:4"];
       assert.ok(row.text_source === "local" && row.text_updated_at);
@@ -214,7 +215,7 @@ test("test_카드_검증_시나리오_유등터널_혼잡과_주차", async (t) 
       ...([[10, "주차장이 만차예요"], [8, "주차할 곳이 없어요"], [6, "주차장 나가는 데 오래 걸려요"], [4, "주차 안내가 없어요"], [2, "주차장 입구가 막혔어요"]] as const)
         .map(([mm, tx]) => [1, "parking", mm, -0.5, false, tx] as Item)];
     await seed(db, items);
-    const cs = await cards(60);
+    const cs = await cards();
     assert.deepEqual([cs[0].label, cs[0].zone_name, cs[0].grade], ["crowd", "유등터널", "immediate"]);
     assert.ok(cs[1].label === "parking" && ["high", "immediate"].includes(cs[1].grade));
     assert.ok(cs[0].card_score >= cs[1].card_score);
@@ -382,16 +383,13 @@ test("test_카드_4일창_역전_건수1위_주차는_즉시카드_아래", asyn
       await worker.ingest();
       await worker.classify_step(50, 5760);
     }
-    const cs = await cards(5760);
-    assert.equal(cs[0].label, "safety");
-    // D5-86: S-04 는 창 전체의 안전 민원 수로 센다 — 안전 유형 3건에 혼잡 유형의 안전 1건이 더해져, 안전 민원이 든 혼잡 카드도 즉시.
-    assert.deepEqual(cs.slice(0, 5).map((c: any) => c.grade), ["immediate", "immediate", "immediate", "immediate", "mid"]);
-    // (넷째 카드는 안전 민원이 든 혼잡 구역 카드, 다섯째는 안전 민원이 없는 구역 카드 — 비안전으로 다시 매겨 '보통', 창 전체 안전 수의 영향 없음)
+    const cs = await cards();
+    // S-04 는 같은 구역 1시간 3건 — 4일에 흩어진 시드의 안전 민원은 구역·시간이 모자라 즉시가 없고, 안전 민원이 든 카드 4장이 '높음'으로 위에 온다.
+    assert.deepEqual(cs.slice(0, 5).map((c: any) => c.grade), ["high", "high", "high", "high", "mid"]);
     const parking = cs.filter((c: any) => c.label === "parking");
-    // 즉시 카드가 3장뿐(D5-59)이라 본 목록(5장)에 주차 카드가 들어올 수 있다 — 건수 1위 주차가 모든 즉시 카드보다 아래에 있다는 점이 핵심
-    const imm = cs.filter((c: any) => c.grade === "immediate");
-    assert.ok(parking.length && parking.every((c: any) => c.grade !== "immediate"));
-    assert.ok(Math.max(...imm.map((c: any) => c.rank_no)) < Math.min(...parking.map((c: any) => c.rank_no)));
+    // 건수 1위 주차는 안전 민원이 든 모든 카드보다 아래에 있다는 점이 핵심
+    assert.ok(parking.length && parking.every((c: any) => c.grade !== "immediate" && !c.is_safety));
+    assert.ok(Math.max(...cs.filter((c: any) => c.is_safety).map((c: any) => c.rank_no)) < Math.min(...parking.map((c: any) => c.rank_no)));
     assert.equal(Math.max(...cs.map((c: any) => c.type_freq)), parking[0].type_freq);
   }));
 });
@@ -412,5 +410,22 @@ test("test_민원지우기_AI문구의_근거_인용에서도_바로_빠진다",
     const row = (await issues.stored())[safety.key];
     assert.deepEqual(J(row.evidence_quotes), []);
     assert.ok(!J(row.latest_quotes).map((c: any) => c.id).includes(q));
+  });
+});
+
+test("test_심각도_입력은_시간창이_아니라_처리안된_누적_새민원이_와도_옛_민원이_남는다", async (t) => {
+  const m = await need(t, "core/db.ts"); if (!m) return;
+  const [db] = m;
+  await withTempDb(async (conn) => {
+    await seed(conn, [[1, "parking", 600, -0.5, false, "열 시간 전 주차 민원이에요"]]);        // 예전 60분 창이면 빠졌을 오래된 민원
+    assert.equal((await db.open_rows()).length, 1);
+    await seed(conn, [[1, "parking", 0, -0.5, false, "방금 들어온 주차 민원이에요"]]);
+    assert.equal((await db.open_rows()).length, 2);                                        // 새 민원이 와도 오래된 것이 사라지지 않는다
+    await run(conn, "INSERT INTO action_request (label, department, status, created_at, closed_at) VALUES ('parking','교통과','done', ?, ?)", [await db.now(), "2999-01-01T00:00:00"]);
+    assert.equal((await db.open_rows()).length, 0);                                        // 그 유형의 조치 완료 이전 접수분은 처리됨
+    await seed(conn, [[1, "restroom", 0, -0.5, false, "다른 유형 화장실 민원이에요"]]);
+    assert.equal((await db.open_rows()).length, 1);                                        // 다른 유형은 영향 없음
+    await run(conn, "UPDATE feedback SET deleted_at=? WHERE raw_text LIKE '%화장실%'", [await db.now()]);
+    assert.equal((await db.open_rows()).length, 0);                                        // 지운 민원은 제외
   });
 });

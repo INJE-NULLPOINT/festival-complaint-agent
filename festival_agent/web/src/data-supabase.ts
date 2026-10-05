@@ -1,6 +1,5 @@
 // Supabase — anon 키로 읽고, 쓰기는 RPC 3개로만 한다 (supabase/schema.sql).
 import { createClient } from "@supabase/supabase-js";
-import { AdminDenied } from "./admin";
 import type { Alert, Backend, DeletedItem, DevFeed, Freshness, Settings, FeedItem, Issue, ReviewItem, Severity } from "./data";
 
 /** classification + feedback 임베드 행을 ReviewItem 으로. 순서는 서버(local)와 같다: 안전 의심 먼저, 그 안에서는 오래된 것 먼저, 최대 20건. */
@@ -62,18 +61,9 @@ export function supabaseBackend(url: string, key: string): Backend {
       (order[a.grade] ?? 9) - (order[b.grade] ?? 9) || safe(a) - safe(b) || b.score - a.score);
   }
 
-  /** 반환값이 {ok:false, error} 면 운영자 코드 거부로 던진다. 잠김은 문구로 가린다 ("시도가 너무 많습니다…"). */
-  function denyIfRejected(data: unknown): void {
-    const d = data as { ok?: boolean; error?: string } | null;
-    if (d && typeof d === "object" && d.ok === false) {
-      const msg = d.error ?? "운영자 코드가 필요합니다";
-      throw new AdminDenied(/시도가 너무 많|잠시 후|10분/.test(msg) ? "locked" : /설정/.test(msg) ? "unset" : "wrong", msg);
-    }
-  }
-  async function adminRpc(name: string, args: Record<string, unknown>, code?: string): Promise<any> {
-    const { data, error } = await sb.rpc(name, { ...args, p_code: code ?? "" });
+  async function rpc(name: string, args: Record<string, unknown>): Promise<any> {
+    const { data, error } = await sb.rpc(name, args);
     if (error) throw new Error(error.message);
-    denyIfRejected(data);
     return data;
   }
 
@@ -151,26 +141,18 @@ export function supabaseBackend(url: string, key: string): Backend {
     async submitFeedback(zoneId, text) {
       return must(await sb.rpc("submit_feedback", { p_zone_id: zoneId, p_text: text }));
     },
-    // 관리자 동작 (D5-31) — RPC 인자 p_code 로 운영자 코드를 보낸다 (묻는 것은 admin.ts 의 gateAdmin).
-    // 서버는 틀린 코드를 예외가 아니라 반환값 {ok:false, error} 로 준다 (예외면 '틀린 시도' 기록이 롤백돼 잠금이 안 걸린다).
-    // 그래서 error 가 아니라 data.ok 를 본다. 없는 민원·잘못된 상태 같은 검증 오류는 예외 그대로.
-    async checkAdmin(code) {
-      const { data, error } = await sb.rpc("check_admin", { p_code: code });
-      if (error) throw new Error(error.message);
-      denyIfRejected(data);
-    },
-    async requestDoc(label, code) {
-      const data = await adminRpc("request_doc", { p_label: label }, code);
+    async requestDoc(label) {
+      const data = await rpc("request_doc", { p_label: label });
       return data.id;                                          // {ok, id}
     },
-    async setActionStatus(id, status, code) {
-      await adminRpc("set_action_status", { p_id: id, p_status: status }, code);
+    async setActionStatus(id, status) {
+      await rpc("set_action_status", { p_id: id, p_status: status });
     },
-    async deleteFeedback(id, code) {
-      await adminRpc("delete_feedback", { p_id: id }, code);
+    async deleteFeedback(id) {
+      await rpc("delete_feedback", { p_id: id });
     },
-    async restoreFeedback(id, code) {
-      await adminRpc("restore_feedback", { p_id: id }, code);
+    async restoreFeedback(id) {
+      await rpc("restore_feedback", { p_id: id });
     },
     async freshness() {
       const { data, error } = await sb.rpc("get_freshness");
@@ -182,26 +164,26 @@ export function supabaseBackend(url: string, key: string): Backend {
       if (error) throw new Error(error.message);
       return ((data as { data?: Settings } | null)?.data ?? data) as Settings;
     },
-    async saveFestival(f, code) { await adminRpc("save_festival", { p_name: f.name, p_region: f.region, p_start_date: f.start_date, p_end_date: f.end_date }, code); },
-    async addZone(name, code) { const d = await adminRpc("add_zone", { p_name: name }, code); return Number(d?.id ?? d); },
-    async renameZone(id, name, code) { await adminRpc("rename_zone", { p_id: id, p_name: name }, code); },
-    async setZoneHidden(id, hidden, code) { await adminRpc("set_zone_hidden", { p_id: id, p_hidden: hidden ? 1 : 0 }, code); },
-    async saveDepartment(label, department, contact, code) { await adminRpc("save_department", { p_label: label, p_department: department, p_contact: contact }, code); },
+    async saveFestival(f) { await rpc("save_festival", { p_name: f.name, p_region: f.region, p_start_date: f.start_date, p_end_date: f.end_date }); },
+    async addZone(name) { const d = await rpc("add_zone", { p_name: name }); return Number(d?.id ?? d); },
+    async renameZone(id, name) { await rpc("rename_zone", { p_id: id, p_name: name }); },
+    async setZoneHidden(id, hidden) { await rpc("set_zone_hidden", { p_id: id, p_hidden: hidden ? 1 : 0 }); },
+    async saveDepartment(label, department, contact) { await rpc("save_department", { p_label: label, p_department: department, p_contact: contact }); },
     async devFeed(since) {
-      return (await adminRpc("dev_feed", { p_since_log: since.log, p_since_cls: since.cls })) as DevFeed;      // 코드는 필요 없다 (빈 p_code)
+      return (await rpc("dev_feed", { p_since_log: since.log, p_since_cls: since.cls })) as DevFeed;
     },
-    async listDeleted(code) {
-      const d = await adminRpc("list_deleted", {}, code);      // {ok, items[]} — 코드가 틀리면 adminRpc 가 이미 던졌다
+    async listDeleted() {
+      const d = await rpc("list_deleted", {});      // {ok, items[]}
       return (d?.items ?? []) as DeletedItem[];
     },
-    async resolveReview(id, label, code) {
-      await adminRpc("resolve_review", { p_id: id, p_label: label }, code);
+    async resolveReview(id, label) {
+      await rpc("resolve_review", { p_id: id, p_label: label });
     },
-    async dismissReview(id, code) {
-      await adminRpc("dismiss_review", { p_id: id }, code);
+    async dismissReview(id) {
+      await rpc("dismiss_review", { p_id: id });
     },
-    async reopenReview(id, code) {
-      await adminRpc("reopen_review", { p_id: id }, code);
+    async reopenReview(id) {
+      await rpc("reopen_review", { p_id: id });
     },
 
     subscribe(h) {

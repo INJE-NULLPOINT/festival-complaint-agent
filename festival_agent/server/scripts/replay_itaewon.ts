@@ -31,7 +31,7 @@ const hm = (s?: string): string => (s ? s.slice(11, 16) : "—");
 
 const lines = [
   "# 이태원 112 공개 신고 시간순 재현", "",
-  `- 입력 ${calls.length}건 (${calls[0].posted_at} ~ ${calls[calls.length - 1].posted_at}) · 1분 간격 · 집계 창 60분`,
+  `- 입력 ${calls.length}건 (${calls[0].posted_at} ~ ${calls[calls.length - 1].posted_at}) · 1분 간격 · 그 시각까지 들어온 신고 누적 (S-04 만 같은 구역 1시간)`,
   "- **분류값은 모델이 아니라 규칙(local) 대역이 붙인 것이다.** 표현 차이로 안전 신고를 놓칠 수 있고, 모델 분류 결과가 아니다.", "",
   "| 유형 | 즉시 등급 | 안전 3건(S-04) | 급증(S-03) |", "|---|---|---|---|",
 ];

@@ -1,11 +1,11 @@
 // 개발자 보기 데이터 (D5-62) — 관리자 화면이 내부 AI 동작을 보여 줄 때 쓰는 한 덩어리. (신규, Python 원본 없음)
 //
-// 심사위원이 에이전트가 도는 모습을 보는 용도라 **공개 읽기 전용**이다 (운영자 코드 없음 — webapi 의 RPC dev_feed · GET /api/dev,
+// 심사위원이 에이전트가 도는 모습을 보는 용도라 **공개 읽기 전용**이다 (webapi 의 RPC dev_feed · GET /api/dev,
 // Supabase 는 schema.sql 의 dev_feed 가 같은 모양을 돌려준다). 공개로 나가도 안전하게:
 //   · 모든 문자열을 redact() 로 가린다 — 개인정보(접수 때 이미 마스킹한 것에 한 번 더)·파일 경로·주소의 ?뒤·DB 주소·키·토큰·해시·IP,
-//     그리고 .env 에 든 비밀값(운영자 코드·서비스 키·API 키·DB 주소) 자체.
+//     그리고 .env 에 든 비밀값(서비스 키·API 키·DB 주소) 자체.
 //   · 응답은 로그 200행·분류 40건까지, 호출은 출처별로 제한한다 (webapi 가 센다).
-//   · 읽는 것은 agent_log·classification·severity·issue·worker_status 뿐 — 운영자 코드 해시·출처 해시 표는 건드리지 않는다.
+//   · 읽는 것은 agent_log·classification·severity·issue·worker_status 뿐 — 출처 해시 표는 건드리지 않는다.
 // 점수·계산식이 들어 있으므로 방문객용 응답(/api/control)에는 계속 넣지 않는다. 관리자 동작(지우기·상태 변경)은 그대로 코드가 필요하다.
 //
 // 응답 { ok, now, max_log_id, max_cls_id, logs[], classifications[], severity[], cards[], status{backend_llm, loops{}, tokens_today{}} }
@@ -26,14 +26,14 @@ const RAW_TEXT_MAX = 120;
 
 /** .env 의 비밀값 — 글자 그대로 나오면 가린다 (4자 미만은 오탐이 커서 제외). */
 function secret_values(): string[] {
-  const vals = [config.ADMIN_CODE, config.SUPABASE_SERVICE_KEY, config.SUPABASE_DB_URL, process.env.ANTHROPIC_API_KEY, process.env.TOURAPI_KEY];
+  const vals = [config.SUPABASE_SERVICE_KEY, config.SUPABASE_DB_URL, process.env.ANTHROPIC_API_KEY, process.env.TOURAPI_KEY];
   return vals.filter((v): v is string => typeof v === "string" && v.length >= 4);
 }
 
 // schema.sql 의 dev_redact() 와 같은 규칙 (순서도 같다)
 const REDACT: [RegExp, string][] = [
   // 로그는 저장할 때 글자 수에서 잘리므로 키의 앞부분만 남아 있을 수 있다 → 앞 8자만 보여도 가린다
-  [/\$2[aby]\$\d{2}\$[./A-Za-z0-9]{8,}/g, "[해시]"],                                // bcrypt (운영자 코드 해시)
+  [/\$2[aby]\$\d{2}\$[./A-Za-z0-9]{8,}/g, "[해시]"],                                // bcrypt 해시
   [/eyJ[A-Za-z0-9_.-]{8,}/g, "[키]"],                                                 // JWT (Supabase 키)
   [/(?:sk|sb|pk)[-_][A-Za-z0-9_-]{8,}/g, "[키]"],                                     // API 키 모양
   [/postgres(?:ql)?:\/\/[^\s"']+/g, "[DB주소]"],

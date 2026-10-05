@@ -1,0 +1,109 @@
+{
+ "file": "page_action.png",
+ "note": "좌표는 CSS px (PNG 는 가로세로 2배). origin 은 PNG 왼쪽 위가 페이지의 어디인지",
+ "cssWidth": 1920,
+ "cssHeight": 1570,
+ "scale": 2,
+ "origin": {
+  "x": 0,
+  "y": 0
+ },
+ "zones": [
+  {
+   "name": "조치 대상 (심각도 순)",
+   "selector": "#app section.card:has(.targets)",
+   "x": 532,
+   "y": 127,
+   "w": 1088,
+   "h": 542
+  },
+  {
+   "name": "조치 대상 · 혼잡",
+   "selector": ".targets li:nth-of-type(1)",
+   "x": 553,
+   "y": 192,
+   "w": 1046,
+   "h": 82
+  },
+  {
+   "name": "조치 대상 · 안전",
+   "selector": ".targets li:nth-of-type(2)",
+   "x": 553,
+   "y": 274,
+   "w": 1046,
+   "h": 83
+  },
+  {
+   "name": "조치 대상 · 주차/교통",
+   "selector": ".targets li:nth-of-type(3)",
+   "x": 553,
+   "y": 358,
+   "w": 1046,
+   "h": 73
+  },
+  {
+   "name": "조치 대상 · 가격/바가지",
+   "selector": ".targets li:nth-of-type(4)",
+   "x": 553,
+   "y": 431,
+   "w": 1046,
+   "h": 73
+  },
+  {
+   "name": "조치 대상 · 화장실",
+   "selector": ".targets li:nth-of-type(5)",
+   "x": 553,
+   "y": 504,
+   "w": 1046,
+   "h": 73
+  },
+  {
+   "name": "조치 대상 · 안내/동선",
+   "selector": ".targets li:nth-of-type(6)",
+   "x": 553,
+   "y": 577,
+   "w": 1046,
+   "h": 73
+  },
+  {
+   "name": "조치요청서 · 처리 현황",
+   "selector": "#app section.card:has(.docs)",
+   "x": 532,
+   "y": 685,
+   "w": 1088,
+   "h": 845
+  },
+  {
+   "name": "요청서 · 혼잡",
+   "selector": ".docs > li:nth-of-type(1)",
+   "x": 553,
+   "y": 748,
+   "w": 1046,
+   "h": 683
+  },
+  {
+   "name": "처리 상태 버튼 (요청·조치중·완료)",
+   "selector": ".docs li.open .seg",
+   "x": 1242,
+   "y": 765,
+   "w": 179,
+   "h": 46
+  },
+  {
+   "name": "조치요청서 미리보기 (종이)",
+   "selector": ".docs li.open .paper",
+   "x": 553,
+   "y": 827,
+   "w": 760,
+   "h": 591
+  },
+  {
+   "name": "요청서 · 안전",
+   "selector": ".docs > li:nth-of-type(2)",
+   "x": 553,
+   "y": 1431,
+   "w": 1046,
+   "h": 79
+  }
+ ]
+}

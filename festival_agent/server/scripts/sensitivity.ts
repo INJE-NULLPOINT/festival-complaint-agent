@@ -62,7 +62,7 @@ async function main(): Promise<number> {
     if (fid !== null) inserted += 1;
   }
   for (let i = 0; i < 40 && (await db.pending_count()) > 0; i++) await classifier.run_once(50);
-  const rows = await db.window_rows(10_000_000);                 // 시드 전체를 한 창으로
+  const rows = await db.open_rows();                             // 시드 전체 (처리된 유형 없음)
   const ref = await db.data_now();
   if (!rows.length) { console.error("분류된 민원이 없습니다."); return 1; }
 

@@ -33,10 +33,6 @@ const insert = (sql: string, ...p: any[]): number => Number(run(sql, ...p).lastI
 const count = (sql: string): number => Number(Object.values(get(sql)!)[0]);
 const tryExec = (fn: () => void) => { try { fn(); } catch { /* 예전 스키마 */ } };
 
-// 운영 DB 의 틀린 운영자 코드 시도 기록(admin_attempt)을 지운다 — 복사본이 '이미 잠긴 채' 시작하면 (최근 10분에 5번 틀림)
-// 점검이 모두 '시도가 너무 많습니다' 로 깨진다. 복사본에만 적용된다.
-tryExec(() => run("DELETE FROM admin_attempt"));
-
 // 복사본에는 워커가 없다 — 운영 DB 의 옛 worker_status 시각이 그대로 오면 화면이 '에이전트 멈춤'으로 바뀐다(D5-86). 먼 미래 시각으로 둬 멈춤 표시를 막는다.
 // (멈춤 표시 자체는 admin_flow 가 dev_feed 응답을 바꿔서 따로 본다)
 tryExec(() => run("UPDATE worker_status SET last_at = '2099-01-01T00:00:00'"));

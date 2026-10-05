@@ -14,7 +14,7 @@
 // - 죽으면 2·4·8…최대 60초 간격으로 다시 띄운다. 60초 넘게 살아 있으면 간격을 처음으로 되돌린다.
 // - 이 스크립트가 두 번 뜨지 않는다 (PID 잠금). 이미 해당 포트가 쓰이고 있으면 그 서버는 건드리지 않고 넘어간다.
 // - DB 를 30분마다 백업하고 최근 12개만 남긴다 (backup/ 은 git 제외).
-//     SUPABASE_DB_URL 이 있으면(운영) Supabase 를 읽기 전용으로 읽어 backup/supabase_*.json 한 파일로 (operator_secret 제외).
+//     SUPABASE_DB_URL 이 있으면(운영) Supabase 를 읽기 전용으로 읽어 backup/supabase_*.json 한 파일로 (source_key 제외).
 //     없으면 festival.db(또는 DB_PATH)를 backup/auto_*.db 로 복사. 복원: node server/cli.ts db restore <파일> [--live-db]
 // - 끄려면 Ctrl+C — 자식 프로세스도 같이 끈다.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";

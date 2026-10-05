@@ -161,12 +161,6 @@ CREATE TABLE IF NOT EXISTS issue (
   gen_at TEXT, fail_count INTEGER DEFAULT 0
 );
 
--- 운영자 코드를 틀린 시도 기록 (core/admin.ts). 10분에 5번 넘게 틀리면 그 창 동안 거부한다.
-CREATE TABLE IF NOT EXISTS admin_attempt (
-  id INTEGER PRIMARY KEY, at TEXT,
-  src TEXT DEFAULT ''          -- 출처 해시(접속 주소 + 하루 비밀값, core/source_id.ts). 원문 IP 는 저장하지 않는다
-);
-
 CREATE TABLE IF NOT EXISTS classify_cache (
   hash TEXT PRIMARY KEY, result TEXT
 );
@@ -194,7 +188,7 @@ export function is_pg(): boolean {
 // ── Postgres 어댑터 ──
 // id 자동 증가 컬럼이 있는 테이블. INSERT 에 RETURNING id 를 붙여 lastrowid 를 흉내 낸다.
 const _ID_TABLES = new Set(["festival", "zone", "feedback", "severity", "alert", "action_request",
-  "agent_task", "agent_log", "briefing", "feedback_inbox", "doc_job", "replay_state", "issue", "admin_attempt"]);
+  "agent_task", "agent_log", "briefing", "feedback_inbox", "doc_job", "replay_state", "issue"]);
 // INSERT OR REPLACE 의 충돌 기준 컬럼
 const _UPSERT_KEY: Record<string, string> = { department_map: "label", classify_cache: "hash", festival_info: "content_id", worker_status: "name" };
 const _INSERT_RE = /^\s*INSERT\s+(OR\s+(IGNORE|REPLACE)\s+)?INTO\s+(\w+)\s*\(([^)]*)\)/is;
@@ -361,8 +355,6 @@ async function _migrate_sqlite(conn: Conn): Promise<void> {
     const c = await cols(tbl);
     if (c.size && !c.has("dup_count")) await conn.execute(`ALTER TABLE ${tbl} ADD COLUMN dup_count INTEGER DEFAULT 0`);
   }
-  have = await cols("admin_attempt");
-  if (have.size && !have.has("src")) await conn.execute("ALTER TABLE admin_attempt ADD COLUMN src TEXT DEFAULT ''");
   have = await cols("classification");
   for (const col of ["suggested_label", "reviewed_at", "review_action", "decided_by"]) {
     if (!have.has(col)) await conn.execute(`ALTER TABLE classification ADD COLUMN ${col} TEXT`);
@@ -598,39 +590,42 @@ export async function data_now(): Promise<Date> {
   return new Date();
 }
 
-/** 지정 구간 내 분류 완료 민원. 심각도 계산의 입력. (review 는 제외) 창은 posted_at 기준. */
-export async function window_rows(window_min: number): Promise<Row[]> {
-  const since = isoformat(plus(await data_now(), -minutes(window_min)));
+/** 처리 안 된 민원 — 그 유형의 조치요청서가 완료(done)된 시각 이전에 접수된 민원은 처리된 것으로 빼고, 이후 접수분은 다시 센다.
+ *  (완료 시각 = closed_at, 접수 시각 = ingested_at — 둘 다 실제 시계. 시간 창이 아니라 누적이다: 새 민원이 들어와도 기존 민원이 사라지지 않는다.) */
+export const OPEN_ITEM_SQL = `c.status='done' AND f.deleted_at IS NULL AND NOT EXISTS (
+  SELECT 1 FROM action_request a WHERE a.label = c.label AND a.status='done' AND a.closed_at >= f.ingested_at)`;
+
+/** 처리 안 된 분류 완료 민원. 심각도 계산의 입력. (review 는 제외) */
+export async function open_rows(): Promise<Row[]> {
   const conn = await connect();
   return (await conn.execute(
     `SELECT c.label, c.sentiment, c.is_safety,
             f.id feedback_id, f.zone_id, f.raw_text,
             f.posted_at, f.ingested_at
      FROM classification c JOIN feedback f ON f.id = c.feedback_id
-     WHERE c.status='done' AND f.posted_at >= ? AND f.deleted_at IS NULL`,
-    [since],
-  )).fetchall();
+     WHERE ${OPEN_ITEM_SQL}`)).fetchall();
 }
+
+/** severity 스냅샷의 집계 기준 표시 (열 이름은 "window" 그대로) — 시간 창이 아니라 처리 안 된 민원 누적이다. */
+export const SEVERITY_BASIS = "open";
 
 export const SYNTHETIC_SOURCES = ["replay", "demo", "dev"];      // 사람이 접수하지 않은 합성·재생 민원의 source 값
 
-/** 집계 창 안에 합성·재생 민원이 있는지 — 관제 머리의 '합성 데이터' 표시용. */
-export async function synthetic_in_window(window_min: number | null = null): Promise<{ on: boolean; count: number }> {
-  const win = window_min || config.DEFAULT_WINDOW_MIN;
-  const since = isoformat(plus(await data_now(), -minutes(win)));
+/** 집계에 들어가는(처리 안 된) 민원 중 합성·재생 민원이 있는지 — 관제 머리의 '합성 데이터' 표시용. */
+export async function synthetic_open(): Promise<{ on: boolean; count: number }> {
   const marks = SYNTHETIC_SOURCES.map(() => "?").join(",");
   const conn = await connect();
   const n = (await conn.execute(
-    `SELECT COUNT(*) AS n FROM feedback f WHERE f.deleted_at IS NULL AND f.posted_at >= ? AND f.source IN (${marks})`,
-    [since, ...SYNTHETIC_SOURCES],
+    `SELECT COUNT(*) AS n FROM classification c JOIN feedback f ON f.id = c.feedback_id
+     WHERE ${OPEN_ITEM_SQL} AND f.source IN (${marks})`,
+    SYNTHETIC_SOURCES,
   )).fetchone()!.n;
   return { on: n > 0, count: n };
 }
 
-/** 심각도 순위. 창 조회 + 미조치 판정 + 기준시각을 한 번에 묶는다. */
-export async function ranked(window_min: number | null = null): Promise<Row[]> {
-  const win = window_min || config.DEFAULT_WINDOW_MIN;
-  const rows = await window_rows(win);
+/** 심각도 순위. 처리 안 된 민원 조회 + 미조치 판정 + 기준시각을 한 번에 묶는다. */
+export async function ranked(): Promise<Row[]> {
+  const rows = await open_rows();
   const ref = await data_now();
   const unhandled = new Map<string, boolean>();          // rank_labels 는 동기 콜백이라 미리 계산해 둔다
   for (const l of new Set(rows.map((r) => r.label as string))) {
@@ -639,20 +634,15 @@ export async function ranked(window_min: number | null = null): Promise<Row[]> {
   return severity.rank_labels(rows, (l: string) => unhandled.get(l) ?? false, { ref });
 }
 
-export async function label_counts(window_min: number | null = null): Promise<Record<string, number>> {
-  let sql = `SELECT c.label, COUNT(*) c FROM classification c
-             JOIN feedback f ON f.id = c.feedback_id
-             WHERE c.status='done' AND f.deleted_at IS NULL`;
-  let params: unknown[] = [];
-  if (window_min) {
-    const since = isoformat(plus(await data_now(), -minutes(window_min)));
-    sql += " AND f.posted_at >= ?";
-    params = [since];
-  }
-  sql += " GROUP BY c.label ORDER BY c DESC";
+/** 유형별 분류 완료 건수. open_only=true 면 처리 안 된 민원만 (심각도와 같은 모집단), 아니면 누적 전체. */
+export async function label_counts(open_only = false): Promise<Record<string, number>> {
+  const sql = `SELECT c.label, COUNT(*) c FROM classification c
+               JOIN feedback f ON f.id = c.feedback_id
+               WHERE ${open_only ? OPEN_ITEM_SQL : "c.status='done' AND f.deleted_at IS NULL"}
+               GROUP BY c.label ORDER BY c DESC`;
   const conn = await connect();
   const out: Record<string, number> = {};
-  for (const r of (await conn.execute(sql, params)).fetchall()) out[r.label] = r.c;
+  for (const r of (await conn.execute(sql)).fetchall()) out[r.label] = r.c;
   return out;
 }
 

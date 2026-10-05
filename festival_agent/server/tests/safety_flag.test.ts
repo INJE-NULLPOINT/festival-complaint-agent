@@ -42,8 +42,8 @@ test("test_혼잡_is_safety_false_만_있으면_비안전과_같다", async (t) 
 test("test_혼잡_안전_1건이_섞이면_하한은_붙지만_즉시는_아니다", async (t) => {
   const m = await need(t, "core/severity.ts", "core/config.ts"); if (!m) return;
   const [S, C] = m; const config = cfgOf(C);
-  // 급증(S-03)이 안 걸리게 20분 간격, 점수가 약하게 (감정 -0.3) — 등급이 점수가 아니라 S-04 때문인지 가린다
-  const spaced = (n: number, safe: boolean, from = 0) => rows(Array.from({ length: n }, (_, i): [string, number, number, boolean] => ["crowd", 10 + 20 * (from + i), -0.3, safe]), NOW);
+  // 급증(S-03)이 안 걸리게 15분 간격 (S-04 는 기준 시각 전 1시간 안의 안전 민원만 센다 — 3건이 1시간 안에 들어오게), 점수가 약하게 (감정 -0.3) — 등급이 점수가 아니라 S-04 때문인지 가린다
+  const spaced = (n: number, safe: boolean, from = 0) => rows(Array.from({ length: n }, (_, i): [string, number, number, boolean] => ["crowd", 10 + 15 * (from + i), -0.3, safe]), NOW);
   const mixed = [...spaced(2, false), ...spaced(1, true, 2)];
   const c = one(S.rank_labels(mixed, { ref: NOW }), "crowd");
   assert.equal(c.safety_w, config.W_SAFETY);
@@ -121,7 +121,7 @@ test("test_같은_유형_위험_구역_2곳과_줄만_긴_구역_1곳", async (t
     }
     assert.ok(wish.rank_no > by("유등터널").rank_no && wish.rank_no > by("남강 수상무대").rank_no);
     // 알림: 유형 등급은 즉시지만 안전 의심 건수를 밝히고, 점수·영어 등급은 쓰지 않는다
-    await monitor.run_once(60);
+    await monitor.run_once();
     const conn = await db.connect();
     const alerts = (await conn.execute("SELECT label, kind, detail FROM alert WHERE label='crowd'")).fetchall();
     assert.ok(alerts.length >= 1);

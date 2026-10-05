@@ -7,8 +7,8 @@
 //   S-01 기본점수 = 윈도우 내 빈도 60% + 부정강도 40%
 //   S-02 안전 관련 ×2.0        (안전 = 민원의 is_safety=true 또는 라벨 safety. 혼잡(crowd)이라도 is_safety=false 면 비안전, D5-59)
 //   S-03 급증 ×1.5      (최근 15분 유입률 >= 직전 60분 평균 × 2)
-//   S-04 안전 N건 이상이면 점수와 무관하게 immediate   (N 은 창 전체의 안전 민원 수 — 유형 건수가 아니다. 혼잡·안전 유형에 갈려 들어온 위험 신고도 합쳐 센다.
-//        즉시는 안전 민원이 든 유형에만 붙는다: 안전 민원이 없는 유형은 창 전체 건수가 N 이상이어도 즉시가 되지 않는다)
+//   S-04 안전 N건 이상이면 점수와 무관하게 immediate   (N 은 같은 구역(zone)의 안전 민원 수 — 유형은 가리지 않는다: 112 반복신고 '1시간·같은 장소·3회' 기준.
+//        구역을 모르는 민원은 서로 묶지 않는다. 즉시는 그 구역의 안전 민원이 든 유형에만 붙는다. 센 구간은 기준 시각 전 1시간 — 나머지 심각도 계산은 처리 안 된 민원 누적)
 //   S-05 positive 는 심각도에서 제외
 //   S-06 미조치 30분 경과 ×1.2
 //
@@ -21,7 +21,7 @@
 // 즉시(immediate) 규칙 (D5-83) — 세 가지만 즉시가 된다:
 //   ① 명시적 생명위험어(압사·질식·쓰러짐·의식 없음·불/화재·물에 빠짐·감전 등, rules.LIFE_DANGER_TERMS)가 든 안전 민원이 1건이라도 있으면 즉시
 //   ② 일반 안전 민원이 1~2건이면 높음까지 — 점수를 79.9 로 자른다 (B-03 과 같은 상한, 안전도 하한 60 은 그대로)
-//   ③ 창 전체의 안전 민원이 3건 이상이면, 안전 민원이 든 유형은 즉시 (S-04)
+//   ③ 같은 구역의 안전 민원이 3건 이상이면, 그 구역의 안전 민원이 든 유형은 즉시 (S-04)
 import { config } from "./config.ts";
 import { fromisoformat, minutes, plus } from "./datetime.ts";
 import { fixed, floatstr, round } from "./pyfmt.ts";
@@ -51,7 +51,7 @@ export function basis_ko(grade: string, freq: number, formula: string): string {
 
 /**
  * 라벨 1개의 심각도. 결정적 함수 — 무작위성 없음. (키워드 인자 is_safety·spiked·unhandled·safety_freq 는 마지막 객체)
- * safety_freq: S-04 에 세는 안전(is_safety=true) 민원 수 (rank_labels 는 창 전체 값을 준다). 생략하면 is_safety 일 때 freq 전체로 본다 (유형 전체가 안전인 호출).
+ * safety_freq: S-04 에 세는 안전(is_safety=true) 민원 수 (rank_labels 는 안전 민원이 든 구역 중 가장 많은 구역의 값을 준다). 생략하면 is_safety 일 때 freq 전체로 본다 (유형 전체가 안전인 호출).
  */
 export function compute_severity(freq: number, avg_sentiment: number, total: number,
                                  opts: { is_safety?: boolean; spiked?: boolean; unhandled?: boolean; safety_freq?: number; life_freq?: number } = {}): Row {
@@ -137,7 +137,7 @@ export function detect_spike(rows: Row[], label: string,
 
 /**
  * 윈도우 행들을 받아 라벨별 심각도를 계산하고 정렬해 돌려준다.
- * rows: db.window_rows() 결과. unhandled_fn: label → bool (S-06, 없으면 전부 false). opts.ref: 기준 시각.
+ * rows: db.open_rows() 결과. unhandled_fn: label → bool (S-06, 없으면 전부 false). opts.ref: 기준 시각.
  * 정렬: 등급 → 안전 가중이 붙은 유형 먼저 → 점수.
  */
 export function rank_labels(rows: Row[],
@@ -157,7 +157,15 @@ export function rank_labels(rows: Row[],
   let total = 0;
   for (const v of buckets.values()) total += v.length;
   const is_safe_item = (i: Row): boolean => Boolean(i.is_safety) || config.SAFETY_LABELS.has(i.label);
-  const window_safety = [...buckets.values()].reduce((n, v) => n + v.filter(is_safe_item).length, 0);   // S-04: 창 전체의 안전 민원 수
+  // S-04: 구역별 안전 민원 수 (유형 무관, 기준 시각 전 SAFETY_ZONE_WINDOW_MIN 분 안). 구역을 모르는 민원(zone_id 없음)은 서로 묶지 않아 1건씩이다.
+  const s04_since = plus(opts.ref ?? new Date(), -minutes(config.SAFETY_ZONE_WINDOW_MIN));
+  const in_s04_window = (i: Row): boolean => { try { return fromisoformat(String(i.posted_at)) >= s04_since; } catch { return true; } };
+  const zone_safety = new Map<string, number>();
+  const keys = new Map<Row, string>();
+  let unknown_seq = 0;
+  for (const v of buckets.values()) for (const i of v) keys.set(i, i.zone_id === null || i.zone_id === undefined || i.zone_id === "" ? `?${unknown_seq++}` : `z${i.zone_id}`);
+  const zkey = (i: Row): string => keys.get(i)!;
+  for (const v of buckets.values()) for (const i of v) if (is_safe_item(i) && in_s04_window(i)) zone_safety.set(zkey(i), (zone_safety.get(zkey(i)) ?? 0) + 1);
   const out: Row[] = [];
   for (const [label, items] of buckets) {
     let sum = 0;
@@ -166,13 +174,14 @@ export function rank_labels(rows: Row[],
     // 안전 민원 = is_safety=true 이거나 라벨이 safety. 혼잡이어도 is_safety=false(줄이 길다 같은 단순 불편)면 비안전이다 (D5-59).
     const safety_freq = items.filter(is_safe_item).length;
     const is_safety = safety_freq > 0;
+    const zone_safety_freq = Math.max(0, ...items.filter(is_safe_item).map((i) => zone_safety.get(zkey(i)) ?? 0));   // 이 유형의 안전 민원이 든 구역 중 가장 많은 구역의 안전 수
     // 명시적 생명위험어가 든 안전 민원 수 (D5-83 ①) — 안전 플래그가 있거나 안전·혼잡 유형인 민원만 센다
     const life_freq = items.filter((i) => (Boolean(i.is_safety) || config.SAFETY_LABELS.has(i.label) || i.label === "crowd") && life_danger(i.raw_text)).length;
     const spike = detect_spike(rows, label, { ref: opts.ref });
     const unhandled = unhandled_fn ? Boolean(unhandled_fn(label)) : false;
 
-    const res = compute_severity(items.length, avg, total, { is_safety: is_safety || life_freq > 0, spiked: spike.spiked, unhandled, safety_freq: safety_freq > 0 ? window_safety : 0, life_freq });
-    Object.assign(res, { label, spike, safety_freq, life_freq, window_safety });          // safety_freq: 안전(is_safety) 민원 수 — 알림이 '혼잡 6건(안전 의심 3건)'처럼 쓴다
+    const res = compute_severity(items.length, avg, total, { is_safety: is_safety || life_freq > 0, spiked: spike.spiked, unhandled, safety_freq: zone_safety_freq, life_freq });
+    Object.assign(res, { label, spike, safety_freq, life_freq, zone_safety: zone_safety_freq });          // safety_freq: 안전(is_safety) 민원 수 — 알림이 '혼잡 6건(안전 의심 3건)'처럼 쓴다
     out.push(res);
   }
 

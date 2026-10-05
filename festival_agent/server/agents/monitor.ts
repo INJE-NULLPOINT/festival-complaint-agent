@@ -2,7 +2,7 @@
 //
 // 목표: 지금 무엇이 얼마나 심각한지 판정하고 임계 초과를 감지한다.
 // ★ 점수는 에이전트가 계산하지 않는다. score_label 도구가 결정적 함수를 부른다.
-//   에이전트가 하는 판단은 "어떤 윈도우를 볼지", "무엇을 알림으로 올릴지", "어떻게 설명할지"이다.
+//   에이전트가 하는 판단은 "무엇을 알림으로 올릴지", "어떻게 설명할지"이다.
 import { config } from "../core/config.ts";
 import { minutes, isoformat, plus } from "../core/datetime.ts";
 import * as db from "../core/db.ts";
@@ -18,7 +18,7 @@ export const SYSTEM = `너는 지역 축제 운영 관제 시스템의 '심각�
 역할: 지금 어떤 유형의 민원이 얼마나 심각한지 판정하고, 즉시 대응이 필요한 상황에 알림을 올린다.
 
 절차
-1. get_window_stats 로 최근 상황을 파악한다 (기본 윈도우 60분). 급증이 의심되면 더 짧은 윈도우(15~30분)로 한 번 더 확인해도 된다.
+1. get_window_stats 로 지금 처리 안 된 민원의 유형별 상황을 파악한다.
 2. 유형마다 score_label 을 호출해 점수와 등급을 받는다. 서로 결과가 필요 없으므로 **한 응답에서 유형별로 동시에** 부른다.
 3. save_snapshot 으로 이번 판정을 기록한다 (같은 응답에서 score_label 들과 함께 불러도 된다).
 4. 아래에 해당하는 유형만 raise_alert 로 알린다: 등급이 immediate / 급증(spiked) 감지 / 직전 판정보다 등급 상승.
@@ -34,19 +34,18 @@ export const SYSTEM = `너는 지역 축제 운영 관제 시스템의 '심각�
 
 export const get_window_stats = tool({
   name: "get_window_stats",
-  description: "지정 시간 구간의 유형별 민원 통계를 조회한다.",
-  properties: { window_min: { type: "integer", description: "구간(분). 기본 60" } },
-  params: ["window_min"],
+  description: "처리 안 된 민원(조치요청서가 완료되지 않은 것)의 유형별 통계를 조회한다.",
+  properties: {},
+  params: [],
   cacheable: true,
-}, async (window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Row> => {
-  const rows = await db.window_rows(window_min);
+}, async (): Promise<Row> => {
+  const rows = await db.open_rows();
   const counts = new Map<string, number>();
   for (const r of rows) counts.set(r.label, (counts.get(r.label) ?? 0) + 1);
   const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);          // 안정 정렬 (동점은 입력 순서)
   const korean: Record<string, number> = {};
   for (const [k, v] of sorted) korean[config.LABELS[k] ?? k] = v;
   return {
-    window_min,
     total: rows.length,
     counts: korean,
     labels: sorted.map(([k]) => k),
@@ -61,13 +60,12 @@ export const score_label = tool({
     "점수·formula 는 판단용이며 사람에게 보이는 문구에는 쓰지 않는다.",
   properties: {
     label: { type: "string", enum: Object.keys(config.LABELS) },
-    window_min: { type: "integer", description: "구간(분). 기본 60" },
   },
   required: ["label"],
-  params: ["label", "window_min"],
+  params: ["label"],
   cacheable: true,
-}, async (label: string, window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Row> => {
-  const ranked = await db.ranked(window_min);
+}, async (label: string): Promise<Row> => {
+  const ranked = await db.ranked();
   for (const r of ranked) {
     if (r.label === label) {
       return {
@@ -78,23 +76,18 @@ export const score_label = tool({
       };
     }
   }
-  return { label, freq: 0, score: 0.0, grade: "low", formula: "해당 구간에 데이터 없음", spiked: false };
+  return { label, freq: 0, score: 0.0, grade: "low", formula: "처리 안 된 민원 없음", spiked: false };
 });
-
-// 짧은 창 재확인(계획, D5-65)은 기록(스냅샷)을 남기지 않는다 — 60분 창 기록의 '가장 최근 판정'이 15분 창으로 바뀌면 화면이 흔들린다.
-export const _RUN = { snapshot: true };
 
 export const save_snapshot = tool({
   name: "save_snapshot",
-  description: "현재 구간의 전체 심각도 판정을 기록한다 (추이의 원천). 같은 판정이 이미 있으면 다시 쓰지 않는다.",
-  properties: { window_min: { type: "integer" } },
-  params: ["window_min"],
-}, async (window_min: number = config.DEFAULT_WINDOW_MIN): Promise<Row> => {
-  if (!_RUN.snapshot) return { saved: 0, already_recorded: false, skipped: true, note: "이번 실행은 재확인이라 기록하지 않는다" };
-  const ranked = await db.ranked(window_min);
-  const window = `${window_min}min`;
-  const already = ranked.length > 0 && (await db.severity_recorded(ranked, window));
-  if (ranked.length && !already) await db.save_severity(ranked, window);
+  description: "현재 전체 심각도 판정을 기록한다 (추이의 원천). 같은 판정이 이미 있으면 다시 쓰지 않는다.",
+  properties: {},
+  params: [],
+}, async (): Promise<Row> => {
+  const ranked = await db.ranked();
+  const already = ranked.length > 0 && (await db.severity_recorded(ranked, db.SEVERITY_BASIS));
+  if (ranked.length && !already) await db.save_severity(ranked, db.SEVERITY_BASIS);
   return {
     saved: already ? 0 : ranked.length, already_recorded: already,
     top: ranked.length ? ranked[0].label : null,
@@ -137,14 +130,12 @@ function _why(s: Row): string {
 
 /** local 대역 — 모든 유형을 점수화하고 규칙대로 알림을 올린다. 제출본 아님. */
 async function local_run(agent: Agent, _user_input: string, ctx: Row): Promise<string> {
-  const win = ctx.window_min ?? config.DEFAULT_WINDOW_MIN;
-
-  const stats: Row = await agent.call("get_window_stats", { window_min: win });
+  const stats: Row = await agent.call("get_window_stats", {});
   if (!stats.labels.length) return "판정할 데이터가 없습니다.";
 
   const scored: Row[] = [];
-  for (const l of stats.labels) scored.push(await agent.call("score_label", { label: l, window_min: win }));
-  await agent.call("save_snapshot", { window_min: win });
+  for (const l of stats.labels) scored.push(await agent.call("score_label", { label: l }));
+  await agent.call("save_snapshot", {});
 
   let raised = 0;
   for (const s of [...scored].sort((a, b) => b.score - a.score)) {
@@ -174,18 +165,8 @@ export const monitor = new Agent({
   local: local_run,
 });
 
-/** opts.snapshot=false: 재확인 실행 — 판정·알림은 그대로 하되 severity 기록은 남기지 않는다 (계획이 짧은 창을 고른 주기, D5-65). */
-export async function run_once(window_min: number = config.DEFAULT_WINDOW_MIN, opts: { snapshot?: boolean } = {}): Promise<string> {
+export async function run_once(): Promise<string> {
   await review.raise_stale_alerts();            // 방치된 안전 의심 '확인 필요' 알림 (같은 민원은 한 번만)
   if (!Object.keys(await db.label_counts()).length) return "";
-  _RUN.snapshot = opts.snapshot !== false;
-  try {
-    return await monitor.run(
-      `최근 ${window_min}분 구간의 민원 상황을 판정하고, 즉시 대응이 필요한 유형이 있으면 알림을 올려줘.` +
-      (_RUN.snapshot ? "" : " 이번은 재확인이라 save_snapshot 은 부르지 마라."),
-      { window_min },
-    );
-  } finally {
-    _RUN.snapshot = true;
-  }
+  return monitor.run("처리 안 된 민원의 상황을 판정하고, 즉시 대응이 필요한 유형이 있으면 알림을 올려줘.");
 }

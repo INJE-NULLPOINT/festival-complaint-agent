@@ -5,16 +5,12 @@
 // 관제 화면은 두 모양이다 — 서버가 issues[] 를 주면 '조치할 일 카드'(D5-29), 안 주면 옛 '심각도 1위 카드'.
 // 지금 어느 쪽인지 화면에서 알아내 그쪽을 점검한다.
 //
-// 운영자 코드(D5-31): 서버가 관리자 동작에 코드를 요구하므로, 테스트용 코드를 환경변수 UI_ADMIN_CODE 로 받는다
-// (run_all 이 무작위 값을 만들어 테스트 webapi 의 ADMIN_CODE 와 여기에 같이 넣는다).
-//
 // 운영 DB 에 돌리지 말 것: 조치 상태를 바꿨다 되돌리고, 요청서 생성을 요청하고, 민원을 지웠다 되살린다.
 // (요청서 '생성' 자체는 워커가 하므로 여기서는 요청이 접수돼 대기 중으로 보이는 데까지만 본다.)
 import { openChrome, quitChrome } from "./lib.ts";
 import { createRequire } from "node:module";
 
 const base = (process.argv[2] ?? "").replace(/\/$/, "");
-const CODE = process.env.UI_ADMIN_CODE ?? "";
 if (!base) { console.error("사용: node tests/ui/admin_flow.ts <base>"); process.exit(2); }
 
 // ── 출력 ──────────────────────────────────────────────────────────
@@ -34,11 +30,8 @@ const until = async (fn, ms = 6000, step = 150) => {
 
 // ── API (vite 프록시 경유 = 화면과 같은 길) ─────────────────────────
 const get = async (p) => (await (await fetch(base + p)).json()).data;
-const headerSafe = (s) => /^[\x20-\x7e]+$/.test(s);      // HTTP 헤더에는 영문·숫자·기호만 실린다 — 한글 등이 섞인 코드는 본문 p_code 로 (화면과 같은 규칙)
-const rpc = async (name, body, code = CODE) => {       // code=null → 일부러 코드 없이 보낸다
-  const viaHeader = !!code && headerSafe(code);
-  const payload = code && !viaHeader ? { ...body, p_code: code } : body;
-  const r = await fetch(`${base}/api/rpc/${name}`, { method: "POST", headers: { "Content-Type": "application/json", ...(viaHeader ? { "X-Admin-Code": code } : {}) }, body: JSON.stringify(payload) });
+const rpc = async (name, body) => {
+  const r = await fetch(`${base}/api/rpc/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   return { status: r.status, data: j.data, error: j.error };
 };
@@ -100,90 +93,28 @@ const control0 = await get("/api/control");
 const action0 = await get("/api/action");
 check("API /api/control · /api/action 응답", control0 && action0 && Array.isArray(action0.actions), `요청서 ${action0?.actions?.length ?? "?"}건 · 유입 ${control0?.feed?.length ?? "?"}건`);
 
-// ══ 0.5 운영자 코드 보호 (D5-31) ═══════════════════════════════════
-// 서버 수준: 코드 없이·틀린 코드로는 관리자 동작이 실행되지 않고, 방문객 접수는 코드 없이 된다.
-const probeAdmin = await rpc("check_admin", {}, null);
-if (probeAdmin.status === 404) skip("운영자 코드 보호", "서버에 check_admin 이 없음 (D5-31 서버 미구현)");
-else if (probeAdmin.status === 403) bad("운영자 코드 보호: 테스트 서버에 코드가 설정돼 있어야 함", "403 — 서버의 ADMIN_CODE 가 비어 있음 (run_all 은 무작위 코드를 넣는다)");
-else if (!CODE) bad("운영자 코드 보호: 테스트용 코드(UI_ADMIN_CODE)가 없음", "run_all 로 돌리거나 환경변수로 넘길 것");
-else {
-  check("코드 보호(서버): 코드 없이 관리자 동작 → 401 거부", probeAdmin.status === 401, `status ${probeAdmin.status} · ${probeAdmin.error}`);
-  const victim = control0.feed?.[0]?.id;
-  const noCode = victim == null ? null : await rpc("delete_feedback", { p_id: victim }, null);
-  const wrongCode = victim == null ? null : await rpc("delete_feedback", { p_id: victim }, "wrong-code");
-  check("코드 보호(서버): 민원 지우기 — 코드 없음·틀림은 거부", victim == null || (noCode.status === 401 && wrongCode.status === 401), `${noCode?.status}/${wrongCode?.status}`);
-  check("코드 보호(서버): 거부된 지우기는 실행되지 않음", victim == null || (await get("/api/control")).feed.some((f) => f.id === victim));
-  const a0 = action0.actions.find((a) => a.status !== "superseded");
-  if (a0) {
-    const st = await rpc("set_action_status", { p_id: a0.id, p_status: "done" }, null);
-    check("코드 보호(서버): 조치 상태 변경 — 코드 없음은 거부·실행 안 됨", st.status === 401 && (await get("/api/action")).actions.find((a) => a.id === a0.id)?.status === a0.status, `status ${st.status}`);
-  }
-  const rd = await rpc("request_doc", { p_label: "safety" }, null);
-  check("코드 보호(서버): 조치요청서 생성 — 코드 없음은 거부", rd.status === 401, `status ${rd.status}`);
-  const visit = await rpc("submit_feedback", { p_zone_id: 1, p_text: "코드 없이 접수되는지 점검" }, null);
-  check("코드 보호(서버): 방문객 접수는 코드 없이 통과", visit.status === 200, `status ${visit.status}`);
-
-  // 화면 수준 — 깨끗한 탭(코드 없음)에서 처음 누르면 입력 창
+// ══ 0.5 관리자 동작은 코드 없이 바로 실행된다 ═══════════════════════════════════
+{
+  const visit = await rpc("submit_feedback", { p_zone_id: 1, p_text: "코드 없이 접수되는지 점검" });
+  check("접수(서버): 코드 없이 통과", visit.status === 200, `status ${visit.status}`);
   await go("control");
-  await ev(`sessionStorage.clear(); localStorage.clear();`);
   const delBtn = ".feed [data-del]";
-  if (!(await exists(delBtn))) skip("코드 보호(화면)", "화면에 [민원 지우기] 버튼이 없음");
+  if (!(await exists(delBtn))) skip("지우기(화면)", "화면에 [민원 지우기] 버튼이 없음");
   else {
     const id = await ev(`${q(delBtn)}.dataset.del`);
     const total0 = (await get("/api/control")).total;
     await click(delBtn);
-    const modal = await until(() => exists(".adm-overlay"), 3000);
-    check("코드 보호(화면): 처음 지우기를 누르면 코드 입력 창", !!modal && (await ev(`!!${q(".adm-modal")}.getAttribute("role") && document.activeElement?.id === "adm-code"`)), "입력칸에 포커스");
-    check("코드 보호(화면): 코드를 넣기 전에는 지워지지 않음 (서버에 안 보냄)", (await get("/api/control")).total === total0 && (await visibleFid(id)) > 0);
-    check("코드 보호(화면): 창 설명에 '확인 필요 처리' 포함 (D5-38 문구)", await ev(`${q("#adm-d")}.textContent.includes("확인 필요 처리")`));
-    check("코드 보호(화면): 입력 창은 가려진 입력(password)·16px 이상", await ev(`${q("#adm-code")}.type === "password" && parseFloat(getComputedStyle(${q("#adm-code")}).fontSize) >= 16`));
-
-    await click(".adm-cancel"); await until(async () => !(await exists(".adm-overlay")), 2000);
-    check("코드 보호(화면): 취소 → 창이 닫히고 민원은 그대로", !(await exists(".adm-overlay")) && !!(await until(async () => (await visibleFid(id)) > 0, 3000)));
-    check("코드 보호(화면): 취소하면 안내 토스트", !!(await until(() => ev(`/취소/.test(document.getElementById("toasts").textContent)`), 2000)));
-
-    await click(delBtn); await until(() => exists(".adm-overlay"), 3000);
-    await ev(`(() => { document.getElementById("adm-code").value = "wrong-code"; })()`); await click(".adm-ok");
-    check("코드 보호(화면): 틀린 코드 → 창이 남고 오류 표시", !!(await until(() => ev(`!document.querySelector(".adm-err").hidden && /맞지 않/.test(document.querySelector(".adm-err").textContent)`), 4000)) && (await exists(".adm-overlay")), await text(".adm-err"));
-    check("코드 보호(화면): 틀린 코드로는 지워지지 않음", (await get("/api/control")).total === total0);
-
-    await ev(`(() => { document.getElementById("adm-code").value = ${JSON.stringify(CODE)}; })()`); await click(".adm-ok");
-    check("코드 보호(화면): 맞는 코드 → 창이 닫히고 지우기 성공", !!(await until(async () => !(await exists(".adm-overlay")) && (await visibleFid(id)) === 0, 5000)));
-    check("코드 보호(화면): 서버에서도 지워짐 (총 건수 -1)", !!(await until(async () => (await get("/api/control")).total === total0 - 1, 4000)));
-    const where = JSON.parse(await ev(`JSON.stringify({ session: Object.keys(sessionStorage).some((k) => sessionStorage.getItem(k) === ${JSON.stringify(CODE)}),
-      local: Object.keys(localStorage).some((k) => localStorage.getItem(k) === ${JSON.stringify(CODE)} || /admin|code/i.test(k)),
-      dom: document.documentElement.outerHTML.includes(${JSON.stringify(CODE)}), url: location.href.includes(${JSON.stringify(CODE)}) })`));
-    check("코드 보관: sessionStorage 에만 (localStorage · 화면 · 주소에는 없음)", where.session && !where.local && !where.dom && !where.url, JSON.stringify(where));
+    check("지우기(화면): 누르면 코드 창 없이 바로 사라진다", !(await exists(".adm-overlay")) && !!(await until(async () => (await visibleFid(id)) === 0, 3000)));
+    check("지우기(화면): 서버에서도 지워짐 (총 건수 -1)", !!(await until(async () => (await get("/api/control")).total === total0 - 1, 4000)));
     await click("#toasts .toast-act");
-    check("코드 보호(화면): 같은 탭의 다음 관리자 동작(되돌리기)은 다시 묻지 않음", !!(await until(async () => (await visibleFid(id)) > 0, 5000)) && !(await exists(".adm-overlay")));
-    // [되돌리기]는 화면이 먼저 돌아오고 서버 반영이 조금 뒤다. 그 요청이 끝나기 전에 새로고침하면 요청이 끊겨 민원이 지워진 채 남고,
-    // 다음 지우기 버튼이 없어 점검이 (가끔) 실패했다 → 서버 반영을 조건으로 기다린 뒤 새로고침하고, 버튼이 나타날 때까지 기다려 누른다.
+    check("지우기(화면): [되돌리기]도 코드 없이 바로 — 다시 보임", !!(await until(async () => (await visibleFid(id)) > 0, 5000)) && !(await exists(".adm-overlay")));
     await until(async () => (await get("/api/control")).total === total0, 6000);
-    await go("control");
-    await until(() => exists(delBtn), 6000);
-    await click(delBtn);
-    check("코드 보관: 새로고침해도 같은 탭이면 기억 (다시 묻지 않음)", !(await until(() => exists(".adm-overlay"), 1200)) && !!(await until(async () => (await visibleFid(id)) === 0, 4000)));
-    await until(async () => (await get("/api/control")).total === total0 - 1, 5000);   // 화면은 즉시 숨기지만 서버 반영은 조금 늦다
-    await rpc("restore_feedback", { p_id: id });                      // 원래대로
-    await until(async () => (await get("/api/control")).total === total0, 5000);
-
-    // 저장된 코드가 더 이상 안 맞을 때(코드가 바뀜) — 다시 묻는다
-    await go("control");
-    await ev(`sessionStorage.setItem("festival_admin_code", "old-code")`);
-    const id2 = await ev(`${q(delBtn)}.dataset.del`);
-    await click(delBtn);
-    check("코드 보호(화면): 저장된 코드가 틀리면 다시 묻고 이유를 알림", !!(await until(() => ev(`!!document.querySelector(".adm-overlay") && /더 이상 맞지 않/.test(document.querySelector(".adm-err")?.textContent ?? "")`), 4000)), await text(".adm-err"));
-    await ev(`(() => { document.getElementById("adm-code").value = ${JSON.stringify(CODE)}; })()`); await click(".adm-ok");
-    check("코드 보호(화면): 다시 맞는 코드를 넣으면 이어서 실행", !!(await until(async () => (await visibleFid(id2)) === 0, 5000)));
-    await until(async () => (await get("/api/control")).total === total0 - 1, 5000);
-    await rpc("restore_feedback", { p_id: id2 });
-    await until(async () => (await get("/api/control")).total === total0, 5000);
   }
 
   // 방문객 화면에는 관리자 요소를 아예 그리지 않는다
   await send("Page.navigate", { url: `${base}/?v=qr` }); await send("Page.reload");
   await until(() => ev(`document.getElementById("app")?.children.length > 0`), 8000); await sleep(700);
-  check("방문객 화면: 입력 창·관리자 버튼 없음", await ev(`!document.querySelector(".adm-overlay, .adm-modal, input[type=password], [data-del], [data-gen], [data-status], #adm-code")`));
+  check("방문객 화면: 관리자 버튼 없음", await ev(`!document.querySelector("[data-del], [data-gen], [data-status], input[type=password]")`));
   await send("Page.navigate", { url: `${base}/?v=qr#control` }); await send("Page.reload");
   await until(() => ev(`document.getElementById("app")?.children.length > 0`), 8000); await sleep(700);
   check("방문객 화면: 주소에 #control 을 붙여도 관제가 아니라 접수 화면", await ev(`!document.querySelector(".icard, .brief, .targets, [data-del]") && !!document.querySelector("#rf, form")`));
@@ -263,10 +194,10 @@ check("관제: 읽는 순서 브리핑 → 카드(1위) → 나머지", order);
   } else skip("카드: 행 펼침", "1위 말고 다른 카드가 없음");
   if (await exists("details.igrp > summary")) {
     await click("details.igrp > summary"); await sleep(250);
-    check("카드: 묶음(그 밖·조치 중·조치 완료) 펼침", await ev(`${q("details.igrp")}.open`), await text("details.igrp > summary"));
+    check("카드: 묶음(그 밖·조치 중) 펼침", await ev(`${q("details.igrp")}.open`), await text("details.igrp > summary"));
     await click("details.igrp > summary"); await sleep(250);
     check("카드: 묶음 접힘", !(await ev(`${q("details.igrp")}.open`)));
-  } else skip("카드: 묶음 펼침", "묶음(그 밖·조치 중·조치 완료)이 없음");
+  } else skip("카드: 묶음 펼침", "묶음(그 밖·조치 중)이 없음");
   if (await exists("details.typerank > summary")) {
     await click("details.typerank > summary"); await sleep(250);
     check("카드: 유형별 순위 펼침 (카드 점수의 근거)", (await ev(`${q("details.typerank")}.open`)) && (await count(".typerank .rank li")) > 0, `${await count(".typerank .rank li")}개 유형`);
@@ -391,15 +322,12 @@ else {
   const c1 = await get("/api/control");
   check("지우기(서버): 유입에서 빠지고 총 건수가 줄어듦", probe.status === 200 && !c1.feed.some((f) => f.id === fid) && c1.total === control0.total - 1, `#${fid} 총 ${control0.total} → ${c1.total}`);
   check("지우기(서버): 변화를 SSE 로 알림", !!(await until(() => sseSince(t0, "change"), 5000)));
-  // 지운 민원 목록 (D5-42) — 토스트가 지나간 뒤에도 되돌릴 수 있게. 코드가 필요하다.
-  const gd = (headers) => fetch(`${base}/api/deleted`, { headers }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
-  check("지운 목록(서버): 코드 없이는 401", (await gd({})).status === 401);
-  check("지운 목록(서버): 틀린 코드는 401", (await gd({ "X-Admin-Code": "wrong-code" })).status === 401);
-  const dl = CODE && headerSafe(CODE) ? await gd({ "X-Admin-Code": CODE }) : null;
+  // 지운 민원 목록 (D5-42) — 토스트가 지나간 뒤에도 되돌릴 수 있게.
+  const dl = await fetch(`${base}/api/deleted`).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
   const dlr = await rpc("list_deleted", {});
   const items = dlr.data?.items ?? [];
   const mine = items.find((x) => x.id === fid);
-  if (dl) check("지운 목록(서버): GET /api/deleted 도 같은 내용", dl.status === 200 && Array.isArray(dl.body.data) && dl.body.data.some((x) => x.id === fid), `status ${dl.status}`);
+  check("지운 목록(서버): GET /api/deleted 도 같은 내용", dl.status === 200 && Array.isArray(dl.body.data) && dl.body.data.some((x) => x.id === fid), `status ${dl.status}`);
   check("지운 목록(서버): 방금 지운 민원이 맨 앞에 (id · 원문 · 구역 · 지운 시각)", dlr.status === 200 && items[0]?.id === fid && !!mine?.raw_text && !!mine?.zone && !!mine?.deleted_at, `${items.length}건 · 맨 앞 #${items[0]?.id}`);
   check("지운 목록(서버): 최대 50건", items.length <= 50);
   const r2 = await rpc("restore_feedback", { p_id: fid });
@@ -498,7 +426,7 @@ await deleteFlow("카드의 최신 민원", ".icard .ic-q [data-del]");
 
 // ══ H. AI 동작 보기 (D5-62) — 끈 상태에는 점수가 없고, 켜면(코드 없이) 로그·에이전트 흐름이 보이고, 방문객 화면에는 없다 ═════════════════
 {
-  const probe = await rpc("dev_feed", { p_since_log: 0, p_since_cls: 0 }, null);
+  const probe = await rpc("dev_feed", { p_since_log: 0, p_since_cls: 0 });
   if (probe.status === 404) skip("AI 동작 보기", "서버에 dev_feed 가 아직 없음");
   else {
     check("AI 동작 보기(서버): 운영자 코드 없이 받을 수 있다 (심사위원이 보는 화면)", probe.status === 200 && Array.isArray(probe.data?.logs) && Array.isArray(probe.data?.severity) && !!probe.data?.status, `status ${probe.status}`);
@@ -559,34 +487,30 @@ await deleteFlow("카드의 최신 민원", ".icard .ic-q [data-del]");
   }
 }
 
-// ══ I. 설정 (D5-90) — 보기는 코드 없이, 저장은 운영자 코드로. 축제 이름·구역 숨김이 사이드바·방문객 화면에 바로 반영 ═════════════════
+// ══ I. 설정 (D5-90) — 보기·저장 모두 코드 없이. 축제 이름·구역 숨김이 사이드바·방문객 화면에 바로 반영 ═════════════════
 {
   const probe = await fetch(`${base}/api/settings`);
   if (probe.status === 404) skip("설정", "서버에 /api/settings 가 아직 없음");
   else {
     const st0 = (await probe.json()).data;
     check("설정(서버): 읽기는 코드 없이 — 축제·구역·담당 부서(부서가 있는 유형 6개 이상 — 긍정은 부서가 없다)", probe.status === 200 && !!st0.festival?.name && Array.isArray(st0.zones) && st0.zones.length > 0 && st0.departments?.length >= 6, `구역 ${st0.zones?.length} · 부서 ${st0.departments?.length}`);
-    check("설정(서버): 저장은 코드 없이는 거부", (await rpc("save_festival", { p_name: "무단 변경", p_region: "", p_start_date: "", p_end_date: "" }, null)).status === 401 && ((await (await fetch(`${base}/api/festival`)).json()).data?.name === st0.festival.name));
 
-    await ev(`sessionStorage.clear()`);
     await go("settings");
     check("설정: 사이드바 '설정' 이 선택되고 세 묶음(축제 정보·구역·담당 부서)이 보이며 코드 창은 없다", (await text(".side-nav a.on")).includes("설정") && (await count(".set-card")) === 3 && !(await exists(".adm-overlay")));
     check("설정: 입력칸에 지금 값이 들어 있다 (축제 이름)", (await ev(`document.querySelector('#set-fest [name=name]').value`)) === st0.festival.name);
 
-    // 저장하려면 코드 창 → 축제 이름이 사이드바·헤더에 바로 반영
+    // 저장하면 코드 창 없이 축제 이름이 사이드바·헤더에 바로 반영
     const NEW = "시험축제 " + Math.floor(Math.random() * 1000);
     await ev(`(() => { const i = document.querySelector('#set-fest [name=name]'); i.value = ${JSON.stringify(NEW)}; })()`);
     await click('#set-fest button[type="submit"]');
-    check("설정: 저장하려고 하면 운영자 코드 창이 뜬다", !!(await until(() => exists(".adm-overlay"), 4000)));
-    await ev(`(() => { document.getElementById("adm-code").value = ${JSON.stringify(CODE)}; })()`); await click(".adm-ok");
-    check("설정: 코드가 맞으면 저장되고 사이드바의 축제 이름이 바로 바뀐다", !!(await until(async () => (await text("#side-name")) === NEW, 15000)), `${await text("#side-name")} / 서버 ${(await get("/api/festival"))?.name} / 기대 ${NEW}`);
+    check("설정: 저장되고 코드 창 없이 사이드바의 축제 이름이 바로 바뀐다", !!(await until(async () => (await text("#side-name")) === NEW, 15000)), `${await text("#side-name")} / 서버 ${(await get("/api/festival"))?.name} / 기대 ${NEW}`);
     check("설정: 저장했다는 안내", !!(await until(async () => /저장했습니다/.test(await text("#set-msg")), 4000)));
 
-    // 구역: 추가 → 방문객 구역 선택에 나타남, 숨기기 → 사라짐 (코드는 이 탭에 이미 있어 다시 묻지 않는다)
+    // 구역: 추가 → 방문객 구역 선택에 나타남, 숨기기 → 사라짐
     const ZN = "시험구역" + Math.floor(Math.random() * 1000);
     await ev(`(() => { document.querySelector('#set-zone-add [name=name]').value = ${JSON.stringify(ZN)}; })()`);
     await click('#set-zone-add button[type="submit"]');
-    check("설정: 구역 추가 — 목록에 나타난다 (코드 창 없이 — 이 탭에 이미 코드가 있다)", !!(await until(() => ev(`[...document.querySelectorAll("#set-zones .set-zname")].some((i) => i.value === ${JSON.stringify(ZN)})`), 6000)) && !(await exists(".adm-overlay")));
+    check("설정: 구역 추가 — 목록에 나타난다 (코드 창 없이)", !!(await until(() => ev(`[...document.querySelectorAll("#set-zones .set-zname")].some((i) => i.value === ${JSON.stringify(ZN)})`), 6000)) && !(await exists(".adm-overlay")));
     const zonesNow = async () => (await (await fetch(`${base}/api/zones`)).json()).data.map((z) => z.name);
     check("설정: 새 구역이 방문객 구역 선택(/api/zones)에 바로 들어간다", (await zonesNow()).includes(ZN));
     await click(`#set-zones [data-zone]:last-child [data-act="hide"]`);
@@ -639,59 +563,6 @@ await deleteFlow("카드의 최신 민원", ".icard .ic-q [data-del]");
   await ev(`window.fetch = window.__f3; document.dispatchEvent(new Event("visibilitychange"))`);
   check("멈춤: 다시 돌면 배너가 사라지고 '실시간'으로 돌아온다", !!(await until(async () => (await ev(`document.getElementById("worker-banner").hidden`)) && (await text("#live")).startsWith("실시간"), 5000)), await text("#live"));
 }
-
-// ══ F. 잠김 · 서버 미설정 (D5-31) — 테스트 서버를 실제로 잠그지 않는다 ═══════════════════
-// 틀린 코드를 5번 넘게 넣으면 그 서버의 관리자 동작이 10분간 전부 막힌다. 그 서버에서 나머지 점검이 이어지면 줄줄이 깨지므로,
-// ① 서버가 정말 잠기는지는 run_all 이 따로 띄운 '잠금 시험용 서버'(UI_LOCK_BASE)에서만 본다 — 본 서버는 잠기지 않는다.
-// ② 화면이 잠김·미설정을 어떻게 보여 주는지는 check_admin 응답을 브라우저에서 429·403 으로 바꿔치기해서 본다 (서버는 그대로).
-const LOCK_BASE = (process.env.UI_LOCK_BASE ?? "").replace(/\/$/, "");
-if (!LOCK_BASE) skip("잠김(서버)", "잠금 시험용 서버(UI_LOCK_BASE)가 없음 — run_all 이 따로 띄워 준다");
-else if (!CODE) bad("잠김(서버): 테스트용 코드(UI_ADMIN_CODE)가 없음");
-else {
-  const rpcLock = async (name, body, code) => {
-    const viaHeader = !!code && headerSafe(code);
-    const r = await fetch(`${LOCK_BASE}/api/rpc/${name}`, { method: "POST", headers: { "Content-Type": "application/json", ...(viaHeader ? { "X-Admin-Code": code } : {}) }, body: JSON.stringify(code && !viaHeader ? { ...body, p_code: code } : body) });
-    return { status: r.status, error: (await r.json().catch(() => ({}))).error };
-  };
-  const fails = [];
-  for (let i = 0; i < 6; i++) fails.push((await rpcLock("check_admin", {}, `wrong${i}`)).status);
-  check("잠김(서버): 틀린 코드를 5번 넘게 → 429", fails.slice(0, 5).every((x) => x === 401) && fails[5] === 429, fails.join(","));
-  check("잠김(서버): 잠긴 동안은 맞는 코드도 거부", (await rpcLock("check_admin", {}, CODE)).status === 429);
-  check("잠김(서버): 잠겨도 방문객 접수는 통과", (await rpcLock("submit_feedback", { p_zone_id: 1, p_text: "잠금 중에도 접수되는지 점검" }, null)).status === 200);
-  const main = await rpc("check_admin", {}, CODE);
-  check("잠김(서버): 잠금은 그 서버만 — 본 테스트 서버는 영향 없음", main.status === 200, `본 서버 status ${main.status}`);
-}
-
-// 화면: 서버를 잠그지 않고 check_admin 응답만 바꿔치기한다
-async function withFakeAdminReply(status, body, fn) {
-  await send("Fetch.enable", { patterns: [{ urlPattern: "*check_admin*" }] });
-  const onMsg = (e) => {
-    const m = JSON.parse(e.data);
-    if (m.method === "Fetch.requestPaused") {
-      send("Fetch.fulfillRequest", { requestId: m.params.requestId, responseCode: status,
-        responseHeaders: [{ name: "Content-Type", value: "application/json; charset=utf-8" }],
-        body: Buffer.from(JSON.stringify(body)).toString("base64") });
-    }
-  };
-  ws.addEventListener("message", onMsg);
-  try { await fn(); } finally { ws.removeEventListener("message", onMsg); await send("Fetch.disable"); }
-}
-async function fakeReplyFlow(label, status, body, expectMsg, closeButtonText) {
-  await go("control");
-  await ev(`sessionStorage.clear()`);
-  if (!(await exists(".feed [data-del]"))) return skip(`${label}(화면)`, "화면에 [민원 지우기] 버튼이 없음");
-  const total0 = (await get("/api/control")).total;
-  await withFakeAdminReply(status, body, async () => {
-    await click(".feed [data-del]"); await until(() => exists(".adm-overlay"), 3000);
-    await ev(`(() => { document.getElementById("adm-code").value = ${JSON.stringify(CODE || "x")}; })()`); await click(".adm-ok");
-    check(`${label}(화면): 안내 문구 · 입력 막힘 · 버튼이 [${closeButtonText}]`, !!(await until(() => ev(`${expectMsg}.test(document.querySelector(".adm-err")?.textContent ?? "") && document.getElementById("adm-code").disabled && document.querySelector(".adm-ok").textContent.trim() === ${JSON.stringify(closeButtonText)}`), 4000)), await text(".adm-err"));
-    await click(".adm-ok");
-  });
-  check(`${label}(화면): 닫으면 창이 사라짐`, !!(await until(async () => !(await exists(".adm-overlay")), 3000)));
-  check(`${label}(화면): 지워지지 않고 코드도 저장되지 않음`, (await get("/api/control")).total === total0 && !(await ev(`Object.keys(sessionStorage).length > 0`)), `총 ${total0}`);
-}
-await fakeReplyFlow("잠김", 429, { error: "시도가 너무 많습니다. 10분 뒤에 다시 시도하세요" }, "/잠시 후/", "닫기");
-await fakeReplyFlow("서버 미설정", 403, { error: "운영자 코드가 필요합니다" }, "/설정되지 않았/", "닫기");
 
 console.log(`\n통과 ${passed} · 실패 ${failed} · 건너뜀 ${skipped}`);
 console.log(failed ? "실패 있음" : "전부 통과");
