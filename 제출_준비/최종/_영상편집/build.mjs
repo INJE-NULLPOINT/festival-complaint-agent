@@ -10,7 +10,7 @@ const SCENES = [
     <div class="label">진주남강유등축제 · 민원 관제 · 시연</div>
     <h1>실시간 축제 민원 관제 <span class="hl">AI Agent</span></h1>
     <div class="team">팀 철철철 · 강은진 · 김동우 · 인제대학교</div>` },
-  { type: "card", id: "s-prob", dur: 6, html: `
+  { type: "card", id: "s-prob", dur: 5, html: `
     <h2>건수가 아니라 <span class="hl">심각도</span>로 순위를 매깁니다</h2>
     <div class="vs">
       <div class="panel before"><div class="label">건수 1위</div><div class="what">주차/교통 54건</div><span class="badge mid">보통</span></div>
@@ -18,52 +18,79 @@ const SCENES = [
       <div class="panel after"><div class="label">심각도 1위</div><div class="what hl">안전 11건</div><span class="badge high">높음</span></div>
     </div>
     <div class="foot">개발용 합성 민원 160건 · 규칙 분류 기준</div>` },
-  { type: "rec", from: 0, dur: 18.6, caps: [
+  // ── 관제 · AI 동작 보기 (rec_pc 3~18.6초)
+  { type: "rec", from: 3, dur: 15.6, caps: [
       [0, "운영자가 띄워 두는 관제 화면 — 맨 위 ‘지금 조치할 일’이 에이전트가 쓴 브리핑입니다."],
-      [8.5, "‘AI 동작 보기’를 켜면 다섯 에이전트가 부른 도구가 실시간으로 기록됩니다."],
-      [13.6, "심각도 탭: 점수는 AI가 아니라 공개된 계산식(코드)이 정합니다."],
-    ], zoom: [[9.5, [1240, 90, 680, 760]]] },
+      [5.5, "‘AI 동작 보기’를 켜면 다섯 에이전트가 부른 도구가 실시간으로 기록됩니다."],
+      [10.6, "심각도 탭: 점수는 AI가 아니라 공개된 계산식(코드)이 정합니다."],
+    ], zoom: [[6.5, [1240, 90, 680, 760]]] },
+  // ── 접수 QR (clip_qr 1~13초)
+  { type: "rec", src: "src/clips/clip_qr.mp4", from: 1, dur: 12, caps: [
+      [0, "구역마다 붙일 접수 QR은 관리자 화면에서 바로 만듭니다."],
+      [3.5, "방문객 폰이 열 수 있는 주소를 넣으면 QR이 다시 그려집니다."],
+      [9.4, "[인쇄] · [PNG 저장]으로 뽑아 구역에 붙입니다."],
+    ] },
   { type: "rec", from: 18.6, dur: 17.4, phone: true, caps: [
       [0, "방문객이 QR 화면에서 민원을 남깁니다 — 이름·연락처 없이."],
       [5, "입력 문장은 시연용으로 지어낸 것입니다."],
       [10.5, "분류 에이전트가 유형과 안전 여부를 판정합니다."],
       [13.3, "방금 민원은 「안전」으로 분류 — 오른쪽에 save_classification 호출이 남습니다."],
     ], zoom: [[11, [1240, 90, 680, 760]]] },
-  { type: "rec", from: 40.4, dur: 14, caps: [
+  // ── 확인 필요 처리 (clip_review 2~14.5초)
+  { type: "rec", src: "src/clips/clip_review.mp4", from: 2, dur: 12.5, caps: [
+      [0, "분류 신뢰도가 낮은 민원은 유형을 정하지 않고 ‘확인 필요’로 따로 둡니다."],
+      [2.8, "[확인 필요]를 누르면 운영자가 한 건씩 처리합니다."],
+      [6.4, "제안된 유형을 지정하거나,"],
+      [9.4, "유형을 붙일 수 없는 의견은 ‘유형 없음’으로 닫습니다."],
+    ] },
+  // ── 지우기 · 되돌리기 (clip_delete 2~11.5초)
+  { type: "rec", src: "src/clips/clip_delete.mp4", from: 2, dur: 9.5, caps: [
+      [0, "필요 없는 민원은 휴지통으로 지웁니다 — 건수·심각도·브리핑 어디에도 들어가지 않습니다."],
+      [5.9, "잘못 지웠으면 안내가 떠 있는 동안 [되돌리기]."],
+    ] },
+  { type: "rec", from: 40.4, dur: 12, caps: [
       [0, "유등터널에서 몰림 민원 2건이 들어옵니다."],
       [7.5, "건수가 더 많은 주차보다 혼잡 카드가 1위로 올라옵니다."],
-    ], zoom: [[8.5, [372, 120, 840, 700]]] },
-  // 관제 화면 전체를 위에서 아래로 (src/page/page_control.png, 구역 좌표 = .json, 설명 = 사용설명서_관리자.md 4.2)
+    ], zoom: [[8, [372, 120, 840, 700]]] },
+  // 관제 화면 전체 (src/page/page_control.png, 설명 = 사용설명서_관리자.md 4.2)
   { type: "tour", img: "src/page/page_control.png", cssW: 1920, cssH: 2582, cropX: 520, cropW: 1120, stops: [
-      { z: [532, 20, 1088, 230], dur: 4, cap: "혼잡 카드가 1위가 된 관제 화면을 위에서부터 — 맨 위는 접수 누적 · 조치할 일 · 확인 필요 · 알림 숫자입니다." },
-      { z: [532, 260, 1088, 299], dur: 5.5, cap: "‘지금 조치할 일’ — 에이전트가 쓴 브리핑. 첫 문장이 결론이고 아래에 근거가 붙습니다." },
-      { z: [532, 576, 1088, 598], dur: 6, cap: "1번 카드 — 지금 가장 먼저: 해야 할 일 · 담당 부서 · 판단 근거가 된 민원 원문." },
-      { z: [532, 1185, 1088, 386], dur: 4.5, cap: "나머지 카드는 심각도 순서로 한 줄씩 — 등급 배지와 건수만 보입니다." },
-      { z: [1110, 1666, 510, 877], dur: 5, cap: "실시간 유입 — 방금 들어온 민원 원문과 유형 · 접수번호 · 구역 · 시각." },
+      { z: [532, 260, 1088, 299], dur: 4.5, cap: "관제 화면을 위에서부터 — ‘지금 조치할 일’은 첫 문장이 결론, 아래에 근거가 붙습니다." },
+      { z: [532, 576, 1088, 598], dur: 5, cap: "1번 카드 — 해야 할 일 · 담당 부서 · 판단 근거가 된 민원 원문." },
+      { z: [1110, 1666, 510, 877], dur: 4.5, cap: "실시간 유입 — 방금 들어온 민원 원문과 유형 · 접수번호 · 구역 · 시각." },
     ] },
   { type: "rec", from: 101.6, dur: 6, caps: [
       [0, "[조치요청서 생성]을 누르면 조치 에이전트가 요청서를 씁니다."],
     ] },
-  { type: "rec", from: 123, dur: 10, caps: [
+  { type: "rec", from: 123, dur: 8, caps: [
       [0, "안전총괄과에 보낼 요청서 — 근거 민원 문장과 판정 이유가 들어 있습니다."],
-    ], zoom: [[3.5, [360, 40, 1200, 860]]] },
-  // 조치 화면 전체 (src/page/page_action.png, 설명 = 사용설명서_관리자.md 4.3)
-  { type: "tour", img: "src/page/page_action.png", cssW: 1920, cssH: 1570, cropX: 520, cropW: 1120, stops: [
-      { z: [553, 748, 1046, 70], dur: 4.5, cap: "조치요청서 · 처리 현황 — 상태를 요청 → 조치중 → 완료로 바꾸고, DOCX로 내려받습니다." },
-      { z: [553, 827, 760, 591], dur: 5.5, cap: "요청서에는 유형 · 건수 · 심각도 · 판정 근거, 민원 원문 인용, 조치 제안이 들어갑니다." },
-    ] },
-  // AI 동작 보기 패널 (src/page/page_dev_log.png, 패널 폭 440)
+    ], zoom: [[3, [360, 40, 1200, 860]]] },
+  // AI 동작 보기 패널 (src/page/page_dev_log_top.png, 패널 폭 440)
   { type: "tour", img: "src/page/page_dev_log_top.png", cssW: 440, cssH: 900, cropX: 0, cropW: 440, k: 1.9, stops: [
-      { z: [1, 118, 439, 135], dur: 4.5, cap: "다섯 에이전트 흐름 — 지금 어느 에이전트가 일하고 있는지 표시됩니다." },
-      { z: [13, 319, 415, 420], dur: 5.5, cap: "기록 한 줄마다 에이전트 · 부른 도구 · 입력 · 결과가 그대로 남습니다." },
+      { z: [13, 118, 415, 520], dur: 5, cap: "AI 동작 보기 — 다섯 에이전트 흐름과, 기록마다 부른 도구 · 입력 · 결과." },
     ] },
-  { type: "rec", from: 139.7, dur: 7, caps: [
+  { type: "rec", from: 139.7, dur: 6, caps: [
       [0, "운영자가 상태를 ‘조치중’으로 바꿉니다."],
     ], zoom: [[0.6, [700, 40, 1220, 700]]] },
   { type: "rec", from: 152.1, dur: 6.6, caps: [
       [0, "다음 판정에 반영되어 관제 브리핑이 바뀐 상태로 다시 쓰입니다."],
     ] },
-  { type: "card", id: "s-res", dur: 8, html: `
+  // ── 완료 · DOCX (clip_docx 1.8~12초) — 다운로드 표시줄은 화면에 없어 자막으로
+  { type: "rec", src: "src/clips/clip_docx.mp4", from: 1.8, dur: 10.2, caps: [
+      [0, "조치가 끝나면 상태를 ‘완료’로 바꿉니다."],
+      [6.6, "요청서는 DOCX 파일로 내려받아 담당 부서에 보냅니다."],
+    ] },
+  // ── 설정 (clip_settings 1~12초)
+  { type: "rec", src: "src/clips/clip_settings.mp4", from: 1, dur: 11, caps: [
+      [0, "설정 화면: 축제 정보 · 구역 · 담당 부서."],
+      [5, "구역·부서·유형은 설정 데이터 — 코드 수정 없이 다른 축제로 옮깁니다."],
+    ] },
+  // ── 이태원 112 재현 (clip_itaewon 4~16초, '즉시' 카드는 클립 약 7.8초)
+  { type: "rec", src: "src/clips/clip_itaewon.mp4", from: 4, dur: 12, note: "<span>공개 112 녹취 시간순 재현 · 규칙 분류</span>", caps: [
+      [0, "이태원 참사 당일 공개된 112 녹취를 시간순으로 다시 넣어 봅니다."],
+      [3.8, "첫 신고 18:34 — 바로 ‘즉시’ 등급 카드와 알림이 뜹니다."],
+      [8.3, "녹취 속 장소는 축제 구역에 없어 ‘구역 미상’으로 표시됩니다."],
+    ] },
+  { type: "card", id: "s-res", dur: 6, html: `
     <h2>개발 단계에서 <span class="hl">확인한 것</span></h2>
     <div class="stats">
       <div class="panel"><div class="big">5/5</div><div class="t">대표 테스트 케이스</div><div class="d">정상 · 모호 · 데이터 없음 · API 오류 · 악의적 입력</div></div>
@@ -71,7 +98,7 @@ const SCENES = [
       <div class="panel"><div class="big">18:34</div><div class="t">첫 신고에서 ‘즉시’</div><div class="d">이태원 112 공개 녹취 11건 시간순 재현 · 규칙 분류</div></div>
       <div class="panel"><div class="big">26/26</div><div class="t">프롬프트 공격 점검</div></div>
     </div>` },
-  { type: "card", id: "s-end", dur: 4, html: `
+  { type: "card", id: "s-end", dur: 3, html: `
     <h1>실시간 축제 민원 관제 <span class="hl">AI Agent</span></h1>
     <div class="team">팀 철철철 · 강은진 · 김동우 · 인제대학교</div>` },
 ];
@@ -108,7 +135,8 @@ for (const s of SCENES) {
     cards += `<section id="${id}" class="tour clip" data-start="${r(t)}" data-duration="${s.dur}" data-track-index="2"><div class="tview"><div class="pan" style="left:${ox}px;width:${r(s.cssW * k)}px;height:${r(s.cssH * k)}px"><img src="${s.img}" alt="">${boxes}</div></div></section>\n`;
   } else {
     const id = `z${++recN}`;
-    recs += `<div class="zoom" id="${id}"><video id="v-${id}" class="clip" src="src/rec_pc.mp4" muted data-start="${r(t)}" data-duration="${s.dur}" data-media-start="${s.from}" data-track-index="1"></video></div>\n`;
+    recs += `<div class="zoom" id="${id}"><video id="v-${id}" class="clip" src="${s.src ?? "src/rec_pc.mp4"}" muted data-start="${r(t)}" data-duration="${s.dur}" data-media-start="${s.from}" data-track-index="1"></video></div>\n`;
+    if (s.note) caps += `<div class="note clip" data-start="${r(t)}" data-duration="${s.dur}" data-track-index="5">${s.note}</div>\n`;
     for (const [at, rect] of s.zoom ?? []) js += `zoomTo("#${id}", ${JSON.stringify(rect)}, ${r(t + at)});\n`;
     s.caps.forEach(([at, text], i) => {
       const end = i + 1 < s.caps.length ? s.caps[i + 1][0] : s.dur;
@@ -176,7 +204,9 @@ html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--
 .pan { position: absolute; top: 0; }
 .pan img { display: block; width: 100%; height: 100%; }
 .box { position: absolute; border: 3px solid var(--cyan); border-radius: 14px; box-shadow: 0 0 24px rgba(92,200,232,.35); opacity: 0; }
-.cap { position: absolute; left: 0; right: 0; top: 925px; height: 120px; display: flex; align-items: center; justify-content: center; font-size: 38px; font-weight: 700; letter-spacing: -.01em; }
+.note { position: absolute; left: 211px; width: 1498px; top: 914px; z-index: 7; text-align: center; font-size: 22px; font-weight: 700; color: #fff; }
+.note span { background: rgba(14,19,28,.88); border: 1px solid var(--line); border-radius: 99px; padding: 6px 20px; }
+.cap { position: absolute; left: 0; right: 0; top: 940px; height: 120px; display: flex; align-items: center; justify-content: center; font-size: 38px; font-weight: 700; letter-spacing: -.01em; }
 .scene { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
 .scene h1 { font-size: 96px; font-weight: 800; letter-spacing: -.03em; margin-top: 30px; }
 .scene h2 { font-size: 62px; font-weight: 800; letter-spacing: -.02em; }

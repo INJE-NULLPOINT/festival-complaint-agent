@@ -32,7 +32,9 @@ html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--
 .pan { position: absolute; top: 0; }
 .pan img { display: block; width: 100%; height: 100%; }
 .box { position: absolute; border: 3px solid var(--cyan); border-radius: 14px; box-shadow: 0 0 24px rgba(92,200,232,.35); opacity: 0; }
-.cap { position: absolute; left: 0; right: 0; top: 925px; height: 120px; display: flex; align-items: center; justify-content: center; font-size: 38px; font-weight: 700; letter-spacing: -.01em; }
+.note { position: absolute; left: 211px; width: 1498px; top: 914px; z-index: 7; text-align: center; font-size: 22px; font-weight: 700; color: #fff; }
+.note span { background: rgba(14,19,28,.88); border: 1px solid var(--line); border-radius: 99px; padding: 6px 20px; }
+.cap { position: absolute; left: 0; right: 0; top: 940px; height: 120px; display: flex; align-items: center; justify-content: center; font-size: 38px; font-weight: 700; letter-spacing: -.01em; }
 .scene { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
 .scene h1 { font-size: 96px; font-weight: 800; letter-spacing: -.03em; margin-top: 30px; }
 .scene h2 { font-size: 62px; font-weight: 800; letter-spacing: -.02em; }
@@ -53,46 +55,64 @@ html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--
 </style>
 </head>
 <body>
-<div id="root" data-composition-id="main" data-start="0" data-duration="148.7" data-width="1920" data-height="1080">
+<div id="root" data-composition-id="main" data-start="0" data-duration="177.2" data-width="1920" data-height="1080">
 <div class="win" id="w-pc" data-layout-allow-overflow>
-<div class="zoom" id="z1"><video id="v-z1" class="clip" src="src/rec_pc.mp4" muted data-start="10" data-duration="18.6" data-media-start="0" data-track-index="1"></video></div>
-<div class="zoom" id="z2"><video id="v-z2" class="clip" src="src/rec_pc.mp4" muted data-start="28.6" data-duration="17.4" data-media-start="18.6" data-track-index="1"></video></div>
-<div class="zoom" id="z3"><video id="v-z3" class="clip" src="src/rec_pc.mp4" muted data-start="46" data-duration="14" data-media-start="40.4" data-track-index="1"></video></div>
-<div class="zoom" id="z4"><video id="v-z4" class="clip" src="src/rec_pc.mp4" muted data-start="85.7" data-duration="6" data-media-start="101.6" data-track-index="1"></video></div>
-<div class="zoom" id="z5"><video id="v-z5" class="clip" src="src/rec_pc.mp4" muted data-start="91.7" data-duration="10" data-media-start="123" data-track-index="1"></video></div>
-<div class="zoom" id="z6"><video id="v-z6" class="clip" src="src/rec_pc.mp4" muted data-start="123.1" data-duration="7" data-media-start="139.7" data-track-index="1"></video></div>
-<div class="zoom" id="z7"><video id="v-z7" class="clip" src="src/rec_pc.mp4" muted data-start="130.1" data-duration="6.6" data-media-start="152.1" data-track-index="1"></video></div>
+<div class="zoom" id="z1"><video id="v-z1" class="clip" src="src/rec_pc.mp4" muted data-start="9" data-duration="15.6" data-media-start="3" data-track-index="1"></video></div>
+<div class="zoom" id="z2"><video id="v-z2" class="clip" src="src/clips/clip_qr.mp4" muted data-start="24.6" data-duration="12" data-media-start="1" data-track-index="1"></video></div>
+<div class="zoom" id="z3"><video id="v-z3" class="clip" src="src/rec_pc.mp4" muted data-start="36.6" data-duration="17.4" data-media-start="18.6" data-track-index="1"></video></div>
+<div class="zoom" id="z4"><video id="v-z4" class="clip" src="src/clips/clip_review.mp4" muted data-start="54" data-duration="12.5" data-media-start="2" data-track-index="1"></video></div>
+<div class="zoom" id="z5"><video id="v-z5" class="clip" src="src/clips/clip_delete.mp4" muted data-start="66.5" data-duration="9.5" data-media-start="2" data-track-index="1"></video></div>
+<div class="zoom" id="z6"><video id="v-z6" class="clip" src="src/rec_pc.mp4" muted data-start="76" data-duration="12" data-media-start="40.4" data-track-index="1"></video></div>
+<div class="zoom" id="z7"><video id="v-z7" class="clip" src="src/rec_pc.mp4" muted data-start="102.7" data-duration="6" data-media-start="101.6" data-track-index="1"></video></div>
+<div class="zoom" id="z8"><video id="v-z8" class="clip" src="src/rec_pc.mp4" muted data-start="108.7" data-duration="8" data-media-start="123" data-track-index="1"></video></div>
+<div class="zoom" id="z9"><video id="v-z9" class="clip" src="src/rec_pc.mp4" muted data-start="122.4" data-duration="6" data-media-start="139.7" data-track-index="1"></video></div>
+<div class="zoom" id="z10"><video id="v-z10" class="clip" src="src/rec_pc.mp4" muted data-start="128.4" data-duration="6.6" data-media-start="152.1" data-track-index="1"></video></div>
+<div class="zoom" id="z11"><video id="v-z11" class="clip" src="src/clips/clip_docx.mp4" muted data-start="135" data-duration="10.2" data-media-start="1.8" data-track-index="1"></video></div>
+<div class="zoom" id="z12"><video id="v-z12" class="clip" src="src/clips/clip_settings.mp4" muted data-start="145.2" data-duration="11" data-media-start="1" data-track-index="1"></video></div>
+<div class="zoom" id="z13"><video id="v-z13" class="clip" src="src/clips/clip_itaewon.mp4" muted data-start="156.2" data-duration="12" data-media-start="4" data-track-index="1"></video></div>
 
 </div>
-<div class="phone" id="w-phone" data-layout-allow-overflow><video id="v-phone" class="clip" src="src/rec_phone.mp4" muted data-start="28.6" data-duration="10.5" data-media-start="2.9" data-track-index="4"></video></div>
+<div class="phone" id="w-phone" data-layout-allow-overflow><video id="v-phone" class="clip" src="src/rec_phone.mp4" muted data-start="36.6" data-duration="10.5" data-media-start="2.9" data-track-index="4"></video></div>
 <div class="phone-tag" id="t-phone">방문객 휴대폰 · QR 접수 화면</div>
-<div class="cap clip" data-start="10" data-duration="8.5" data-track-index="3">운영자가 띄워 두는 관제 화면 — 맨 위 ‘지금 조치할 일’이 에이전트가 쓴 브리핑입니다.</div>
-<div class="cap clip" data-start="18.5" data-duration="5.1" data-track-index="3">‘AI 동작 보기’를 켜면 다섯 에이전트가 부른 도구가 실시간으로 기록됩니다.</div>
-<div class="cap clip" data-start="23.6" data-duration="5" data-track-index="3">심각도 탭: 점수는 AI가 아니라 공개된 계산식(코드)이 정합니다.</div>
-<div class="cap clip" data-start="28.6" data-duration="5" data-track-index="3">방문객이 QR 화면에서 민원을 남깁니다 — 이름·연락처 없이.</div>
-<div class="cap clip" data-start="33.6" data-duration="5.5" data-track-index="3">입력 문장은 시연용으로 지어낸 것입니다.</div>
-<div class="cap clip" data-start="39.1" data-duration="2.8" data-track-index="3">분류 에이전트가 유형과 안전 여부를 판정합니다.</div>
-<div class="cap clip" data-start="41.9" data-duration="4.1" data-track-index="3">방금 민원은 「안전」으로 분류 — 오른쪽에 save_classification 호출이 남습니다.</div>
-<div class="cap clip" data-start="46" data-duration="7.5" data-track-index="3">유등터널에서 몰림 민원 2건이 들어옵니다.</div>
-<div class="cap clip" data-start="53.5" data-duration="6.5" data-track-index="3">건수가 더 많은 주차보다 혼잡 카드가 1위로 올라옵니다.</div>
-<div class="cap clip" data-start="60.4" data-duration="4" data-track-index="3">혼잡 카드가 1위가 된 관제 화면을 위에서부터 — 맨 위는 접수 누적 · 조치할 일 · 확인 필요 · 알림 숫자입니다.</div>
-<div class="cap clip" data-start="64.4" data-duration="5.5" data-track-index="3">‘지금 조치할 일’ — 에이전트가 쓴 브리핑. 첫 문장이 결론이고 아래에 근거가 붙습니다.</div>
-<div class="cap clip" data-start="69.9" data-duration="6" data-track-index="3">1번 카드 — 지금 가장 먼저: 해야 할 일 · 담당 부서 · 판단 근거가 된 민원 원문.</div>
-<div class="cap clip" data-start="75.9" data-duration="4.5" data-track-index="3">나머지 카드는 심각도 순서로 한 줄씩 — 등급 배지와 건수만 보입니다.</div>
-<div class="cap clip" data-start="80.4" data-duration="5" data-track-index="3">실시간 유입 — 방금 들어온 민원 원문과 유형 · 접수번호 · 구역 · 시각.</div>
-<div class="cap clip" data-start="85.7" data-duration="6" data-track-index="3">[조치요청서 생성]을 누르면 조치 에이전트가 요청서를 씁니다.</div>
-<div class="cap clip" data-start="91.7" data-duration="10" data-track-index="3">안전총괄과에 보낼 요청서 — 근거 민원 문장과 판정 이유가 들어 있습니다.</div>
-<div class="cap clip" data-start="102.1" data-duration="4.5" data-track-index="3">조치요청서 · 처리 현황 — 상태를 요청 → 조치중 → 완료로 바꾸고, DOCX로 내려받습니다.</div>
-<div class="cap clip" data-start="106.6" data-duration="5.5" data-track-index="3">요청서에는 유형 · 건수 · 심각도 · 판정 근거, 민원 원문 인용, 조치 제안이 들어갑니다.</div>
-<div class="cap clip" data-start="112.8" data-duration="4.5" data-track-index="3">다섯 에이전트 흐름 — 지금 어느 에이전트가 일하고 있는지 표시됩니다.</div>
-<div class="cap clip" data-start="117.3" data-duration="5.5" data-track-index="3">기록 한 줄마다 에이전트 · 부른 도구 · 입력 · 결과가 그대로 남습니다.</div>
-<div class="cap clip" data-start="123.1" data-duration="7" data-track-index="3">운영자가 상태를 ‘조치중’으로 바꿉니다.</div>
-<div class="cap clip" data-start="130.1" data-duration="6.6" data-track-index="3">다음 판정에 반영되어 관제 브리핑이 바뀐 상태로 다시 쓰입니다.</div>
+<div class="cap clip" data-start="9" data-duration="5.5" data-track-index="3">운영자가 띄워 두는 관제 화면 — 맨 위 ‘지금 조치할 일’이 에이전트가 쓴 브리핑입니다.</div>
+<div class="cap clip" data-start="14.5" data-duration="5.1" data-track-index="3">‘AI 동작 보기’를 켜면 다섯 에이전트가 부른 도구가 실시간으로 기록됩니다.</div>
+<div class="cap clip" data-start="19.6" data-duration="5" data-track-index="3">심각도 탭: 점수는 AI가 아니라 공개된 계산식(코드)이 정합니다.</div>
+<div class="cap clip" data-start="24.6" data-duration="3.5" data-track-index="3">구역마다 붙일 접수 QR은 관리자 화면에서 바로 만듭니다.</div>
+<div class="cap clip" data-start="28.1" data-duration="5.9" data-track-index="3">방문객 폰이 열 수 있는 주소를 넣으면 QR이 다시 그려집니다.</div>
+<div class="cap clip" data-start="34" data-duration="2.6" data-track-index="3">[인쇄] · [PNG 저장]으로 뽑아 구역에 붙입니다.</div>
+<div class="cap clip" data-start="36.6" data-duration="5" data-track-index="3">방문객이 QR 화면에서 민원을 남깁니다 — 이름·연락처 없이.</div>
+<div class="cap clip" data-start="41.6" data-duration="5.5" data-track-index="3">입력 문장은 시연용으로 지어낸 것입니다.</div>
+<div class="cap clip" data-start="47.1" data-duration="2.8" data-track-index="3">분류 에이전트가 유형과 안전 여부를 판정합니다.</div>
+<div class="cap clip" data-start="49.9" data-duration="4.1" data-track-index="3">방금 민원은 「안전」으로 분류 — 오른쪽에 save_classification 호출이 남습니다.</div>
+<div class="cap clip" data-start="54" data-duration="2.8" data-track-index="3">분류 신뢰도가 낮은 민원은 유형을 정하지 않고 ‘확인 필요’로 따로 둡니다.</div>
+<div class="cap clip" data-start="56.8" data-duration="3.6" data-track-index="3">[확인 필요]를 누르면 운영자가 한 건씩 처리합니다.</div>
+<div class="cap clip" data-start="60.4" data-duration="3" data-track-index="3">제안된 유형을 지정하거나,</div>
+<div class="cap clip" data-start="63.4" data-duration="3.1" data-track-index="3">유형을 붙일 수 없는 의견은 ‘유형 없음’으로 닫습니다.</div>
+<div class="cap clip" data-start="66.5" data-duration="5.9" data-track-index="3">필요 없는 민원은 휴지통으로 지웁니다 — 건수·심각도·브리핑 어디에도 들어가지 않습니다.</div>
+<div class="cap clip" data-start="72.4" data-duration="3.6" data-track-index="3">잘못 지웠으면 안내가 떠 있는 동안 [되돌리기].</div>
+<div class="cap clip" data-start="76" data-duration="7.5" data-track-index="3">유등터널에서 몰림 민원 2건이 들어옵니다.</div>
+<div class="cap clip" data-start="83.5" data-duration="4.5" data-track-index="3">건수가 더 많은 주차보다 혼잡 카드가 1위로 올라옵니다.</div>
+<div class="cap clip" data-start="88.4" data-duration="4.5" data-track-index="3">관제 화면을 위에서부터 — ‘지금 조치할 일’은 첫 문장이 결론, 아래에 근거가 붙습니다.</div>
+<div class="cap clip" data-start="92.9" data-duration="5" data-track-index="3">1번 카드 — 해야 할 일 · 담당 부서 · 판단 근거가 된 민원 원문.</div>
+<div class="cap clip" data-start="97.9" data-duration="4.5" data-track-index="3">실시간 유입 — 방금 들어온 민원 원문과 유형 · 접수번호 · 구역 · 시각.</div>
+<div class="cap clip" data-start="102.7" data-duration="6" data-track-index="3">[조치요청서 생성]을 누르면 조치 에이전트가 요청서를 씁니다.</div>
+<div class="cap clip" data-start="108.7" data-duration="8" data-track-index="3">안전총괄과에 보낼 요청서 — 근거 민원 문장과 판정 이유가 들어 있습니다.</div>
+<div class="cap clip" data-start="117.1" data-duration="5" data-track-index="3">AI 동작 보기 — 다섯 에이전트 흐름과, 기록마다 부른 도구 · 입력 · 결과.</div>
+<div class="cap clip" data-start="122.4" data-duration="6" data-track-index="3">운영자가 상태를 ‘조치중’으로 바꿉니다.</div>
+<div class="cap clip" data-start="128.4" data-duration="6.6" data-track-index="3">다음 판정에 반영되어 관제 브리핑이 바뀐 상태로 다시 쓰입니다.</div>
+<div class="cap clip" data-start="135" data-duration="6.6" data-track-index="3">조치가 끝나면 상태를 ‘완료’로 바꿉니다.</div>
+<div class="cap clip" data-start="141.6" data-duration="3.6" data-track-index="3">요청서는 DOCX 파일로 내려받아 담당 부서에 보냅니다.</div>
+<div class="cap clip" data-start="145.2" data-duration="5" data-track-index="3">설정 화면: 축제 정보 · 구역 · 담당 부서.</div>
+<div class="cap clip" data-start="150.2" data-duration="6" data-track-index="3">구역·부서·유형은 설정 데이터 — 코드 수정 없이 다른 축제로 옮깁니다.</div>
+<div class="note clip" data-start="156.2" data-duration="12" data-track-index="5"><span>공개 112 녹취 시간순 재현 · 규칙 분류</span></div>
+<div class="cap clip" data-start="156.2" data-duration="3.8" data-track-index="3">이태원 참사 당일 공개된 112 녹취를 시간순으로 다시 넣어 봅니다.</div>
+<div class="cap clip" data-start="160" data-duration="4.5" data-track-index="3">첫 신고 18:34 — 바로 ‘즉시’ 등급 카드와 알림이 뜹니다.</div>
+<div class="cap clip" data-start="164.5" data-duration="3.7" data-track-index="3">녹취 속 장소는 축제 구역에 없어 ‘구역 미상’으로 표시됩니다.</div>
 <section id="s-title" class="scene clip" data-start="0" data-duration="4" data-track-index="2">
     <div class="label">진주남강유등축제 · 민원 관제 · 시연</div>
     <h1>실시간 축제 민원 관제 <span class="hl">AI Agent</span></h1>
     <div class="team">팀 철철철 · 강은진 · 김동우 · 인제대학교</div></section>
-<section id="s-prob" class="scene clip" data-start="4" data-duration="6" data-track-index="2">
+<section id="s-prob" class="scene clip" data-start="4" data-duration="5" data-track-index="2">
     <h2>건수가 아니라 <span class="hl">심각도</span>로 순위를 매깁니다</h2>
     <div class="vs">
       <div class="panel before"><div class="label">건수 1위</div><div class="what">주차/교통 54건</div><span class="badge mid">보통</span></div>
@@ -100,10 +120,9 @@ html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--
       <div class="panel after"><div class="label">심각도 1위</div><div class="what hl">안전 11건</div><span class="badge high">높음</span></div>
     </div>
     <div class="foot">개발용 합성 민원 160건 · 규칙 분류 기준</div></section>
-<section id="tour1" class="tour clip" data-start="60" data-duration="25.7" data-track-index="2"><div class="tview"><div class="pan" style="left:-695.5px;width:2568px;height:3453.43px"><img src="src/page/page_control.png" alt=""><div class="box" id="tour1b0" style="left:705.55px;top:20.75px;width:1467.2px;height:319.63px"></div><div class="box" id="tour1b1" style="left:705.55px;top:341.75px;width:1467.2px;height:411.91px"></div><div class="box" id="tour1b2" style="left:705.55px;top:764.4px;width:1467.2px;height:811.83px"></div><div class="box" id="tour1b3" style="left:705.55px;top:1578.94px;width:1467.2px;height:528.28px"></div><div class="box" id="tour1b4" style="left:1478.63px;top:2222.27px;width:694.13px;height:1184.99px"></div></div></div></section>
-<section id="tour2" class="tour clip" data-start="101.7" data-duration="10.7" data-track-index="2"><div class="tview"><div class="pan" style="left:-695.5px;width:2568px;height:2099.88px"><img src="src/page/page_action.png" alt=""><div class="box" id="tour2b0" style="left:733.64px;top:994.45px;width:1411.03px;height:105.63px"></div><div class="box" id="tour2b1" style="left:733.64px;top:1100.11px;width:1028.5px;height:802.46px"></div></div></div></section>
-<section id="tour3" class="tour clip" data-start="112.4" data-duration="10.7" data-track-index="2"><div class="tview"><div class="pan" style="left:331px;width:836px;height:1710px"><img src="src/page/page_dev_log_top.png" alt=""><div class="box" id="tour3b0" style="left:-4.1px;top:218.2px;width:846.1px;height:268.5px"></div><div class="box" id="tour3b1" style="left:18.7px;top:600.1px;width:800.5px;height:810px"></div></div></div></section>
-<section id="s-res" class="scene clip" data-start="136.7" data-duration="8" data-track-index="2">
+<section id="tour1" class="tour clip" data-start="88" data-duration="14.7" data-track-index="2"><div class="tview"><div class="pan" style="left:-695.5px;width:2568px;height:3453.43px"><img src="src/page/page_control.png" alt=""><div class="box" id="tour1b0" style="left:705.55px;top:341.75px;width:1467.2px;height:411.91px"></div><div class="box" id="tour1b1" style="left:705.55px;top:764.4px;width:1467.2px;height:811.83px"></div><div class="box" id="tour1b2" style="left:1478.63px;top:2222.27px;width:694.13px;height:1184.99px"></div></div></div></section>
+<section id="tour2" class="tour clip" data-start="116.7" data-duration="5.7" data-track-index="2"><div class="tview"><div class="pan" style="left:331px;width:836px;height:1710px"><img src="src/page/page_dev_log_top.png" alt=""><div class="box" id="tour2b0" style="left:18.7px;top:218.2px;width:800.5px;height:1000px"></div></div></div></section>
+<section id="s-res" class="scene clip" data-start="168.2" data-duration="6" data-track-index="2">
     <h2>개발 단계에서 <span class="hl">확인한 것</span></h2>
     <div class="stats">
       <div class="panel"><div class="big">5/5</div><div class="t">대표 테스트 케이스</div><div class="d">정상 · 모호 · 데이터 없음 · API 오류 · 악의적 입력</div></div>
@@ -111,7 +130,7 @@ html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--
       <div class="panel"><div class="big">18:34</div><div class="t">첫 신고에서 ‘즉시’</div><div class="d">이태원 112 공개 녹취 11건 시간순 재현 · 규칙 분류</div></div>
       <div class="panel"><div class="big">26/26</div><div class="t">프롬프트 공격 점검</div></div>
     </div></section>
-<section id="s-end" class="scene clip" data-start="144.7" data-duration="4" data-track-index="2">
+<section id="s-end" class="scene clip" data-start="174.2" data-duration="3" data-track-index="2">
     <h1>실시간 축제 민원 관제 <span class="hl">AI Agent</span></h1>
     <div class="team">팀 철철철 · 강은진 · 김동우 · 인제대학교</div></section>
 
@@ -130,63 +149,46 @@ function zoomTo(id, [x, y, w, h], at, dur = 1.2) {
   const ty = Math.min(0, Math.max(FH - 1080 * s, FH / 2 - s * (y + h / 2)));
   tl.to(id, { x: tx, y: ty, scale: s, duration: dur, ease: "power2.inOut" }, at);
 }
-tl.to("#w-pc", { opacity: 1, duration: 0.35 }, 10);
-tl.to("#w-pc", { opacity: 0, duration: 0.3 }, 59.7);
-tl.to("#w-pc", { opacity: 1, duration: 0.35 }, 85.7);
-tl.to("#w-pc", { opacity: 0, duration: 0.3 }, 101.4);
-tl.to("#w-pc", { opacity: 1, duration: 0.35 }, 123.1);
-tl.to("#w-pc", { opacity: 0, duration: 0.3 }, 136.4);
+tl.to("#w-pc", { opacity: 1, duration: 0.35 }, 9);
+tl.to("#w-pc", { opacity: 0, duration: 0.3 }, 87.7);
+tl.to("#w-pc", { opacity: 1, duration: 0.35 }, 102.7);
+tl.to("#w-pc", { opacity: 0, duration: 0.3 }, 116.4);
+tl.to("#w-pc", { opacity: 1, duration: 0.35 }, 122.4);
+tl.to("#w-pc", { opacity: 0, duration: 0.3 }, 167.9);
 
-tl.to("#w-pc", { x: -200, duration: 0.8, ease: "power2.inOut" }, 28.6);
-tl.to("#w-phone, #t-phone", { opacity: 1, duration: 0.4 }, 28.6);
-tl.to("#w-phone, #t-phone", { opacity: 0, duration: 0.4 }, 38.7);
-tl.to("#w-pc", { x: 0, duration: 0.8, ease: "power2.inOut" }, 38.9);
+tl.to("#w-pc", { x: -200, duration: 0.8, ease: "power2.inOut" }, 36.6);
+tl.to("#w-phone, #t-phone", { opacity: 1, duration: 0.4 }, 36.6);
+tl.to("#w-phone, #t-phone", { opacity: 0, duration: 0.4 }, 46.7);
+tl.to("#w-pc", { x: 0, duration: 0.8, ease: "power2.inOut" }, 46.9);
 rise("#s-title > *", 0.2, 0.15);
 tl.to("#s-title", { opacity: 0, duration: 0.35 }, 3.65);
 rise("#s-prob > *", 4.2, 0.15);
-tl.to("#s-prob", { opacity: 0, duration: 0.35 }, 9.65);
-zoomTo("#z1", [1240,90,680,760], 19.5);
-zoomTo("#z2", [1240,90,680,760], 39.6);
-zoomTo("#z3", [372,120,840,700], 54.5);
-tl.set("#tour1 .pan", { y: 0 }, 60);
-tl.fromTo("#tour1", { opacity: 0 }, { opacity: 1, duration: 0.35 }, 60);
-tl.to("#tour1b0", { opacity: 1, duration: 0.4 }, 60.6);
-tl.to("#tour1b0", { opacity: 0, duration: 0.3 }, 64.1);
-tl.to("#tour1 .pan", { y: -126.21, duration: 1.1, ease: "power2.inOut" }, 64.4);
-tl.to("#tour1b1", { opacity: 1, duration: 0.4 }, 65.3);
-tl.to("#tour1b1", { opacity: 0, duration: 0.3 }, 69.6);
-tl.to("#tour1 .pan", { y: -748.81, duration: 1.1, ease: "power2.inOut" }, 69.9);
-tl.to("#tour1b2", { opacity: 1, duration: 0.4 }, 70.8);
-tl.to("#tour1b2", { opacity: 0, duration: 0.3 }, 75.6);
-tl.to("#tour1 .pan", { y: -1421.57, duration: 1.1, ease: "power2.inOut" }, 75.9);
-tl.to("#tour1b3", { opacity: 1, duration: 0.4 }, 76.8);
-tl.to("#tour1b3", { opacity: 0, duration: 0.3 }, 80.1);
-tl.to("#tour1 .pan", { y: -2393.27, duration: 1.1, ease: "power2.inOut" }, 80.4);
-tl.to("#tour1b4", { opacity: 1, duration: 0.4 }, 81.3);
-tl.to("#tour1b4", { opacity: 0, duration: 0.3 }, 85.1);
-tl.to("#tour1", { opacity: 0, duration: 0.3 }, 85.4);
-zoomTo("#z5", [360,40,1200,860], 95.2);
-tl.set("#tour2 .pan", { y: -625.76 }, 101.7);
-tl.fromTo("#tour2", { opacity: 0 }, { opacity: 1, duration: 0.35 }, 101.7);
-tl.to("#tour2b0", { opacity: 1, duration: 0.4 }, 102.3);
-tl.to("#tour2b0", { opacity: 0, duration: 0.3 }, 106.3);
-tl.to("#tour2 .pan", { y: -1079.84, duration: 1.1, ease: "power2.inOut" }, 106.6);
-tl.to("#tour2b1", { opacity: 1, duration: 0.4 }, 107.5);
-tl.to("#tour2b1", { opacity: 0, duration: 0.3 }, 111.8);
-tl.to("#tour2", { opacity: 0, duration: 0.3 }, 112.1);
-tl.set("#tour3 .pan", { y: 0 }, 112.4);
-tl.fromTo("#tour3", { opacity: 0 }, { opacity: 1, duration: 0.35 }, 112.4);
-tl.to("#tour3b0", { opacity: 1, duration: 0.4 }, 113);
-tl.to("#tour3b0", { opacity: 0, duration: 0.3 }, 117);
-tl.to("#tour3 .pan", { y: -583.6, duration: 1.1, ease: "power2.inOut" }, 117.3);
-tl.to("#tour3b1", { opacity: 1, duration: 0.4 }, 118.2);
-tl.to("#tour3b1", { opacity: 0, duration: 0.3 }, 122.5);
-tl.to("#tour3", { opacity: 0, duration: 0.3 }, 122.8);
-zoomTo("#z6", [700,40,1220,700], 123.7);
-rise("#s-res > *", 136.9, 0.15);
-tl.to("#s-res", { opacity: 0, duration: 0.35 }, 144.35);
-rise("#s-end > *", 144.9, 0.15);
-tl.to("#s-end", { opacity: 0, duration: 0.35 }, 148.35);
+tl.to("#s-prob", { opacity: 0, duration: 0.35 }, 8.65);
+zoomTo("#z1", [1240,90,680,760], 15.5);
+zoomTo("#z3", [1240,90,680,760], 47.6);
+zoomTo("#z6", [372,120,840,700], 84);
+tl.set("#tour1 .pan", { y: -126.21 }, 88);
+tl.fromTo("#tour1", { opacity: 0 }, { opacity: 1, duration: 0.35 }, 88);
+tl.to("#tour1b0", { opacity: 1, duration: 0.4 }, 88.6);
+tl.to("#tour1b0", { opacity: 0, duration: 0.3 }, 92.6);
+tl.to("#tour1 .pan", { y: -748.81, duration: 1.1, ease: "power2.inOut" }, 92.9);
+tl.to("#tour1b1", { opacity: 1, duration: 0.4 }, 93.8);
+tl.to("#tour1b1", { opacity: 0, duration: 0.3 }, 97.6);
+tl.to("#tour1 .pan", { y: -2393.27, duration: 1.1, ease: "power2.inOut" }, 97.9);
+tl.to("#tour1b2", { opacity: 1, duration: 0.4 }, 98.8);
+tl.to("#tour1b2", { opacity: 0, duration: 0.3 }, 102.1);
+tl.to("#tour1", { opacity: 0, duration: 0.3 }, 102.4);
+zoomTo("#z8", [360,40,1200,860], 111.7);
+tl.set("#tour2 .pan", { y: -296.7 }, 116.7);
+tl.fromTo("#tour2", { opacity: 0 }, { opacity: 1, duration: 0.35 }, 116.7);
+tl.to("#tour2b0", { opacity: 1, duration: 0.4 }, 117.3);
+tl.to("#tour2b0", { opacity: 0, duration: 0.3 }, 121.8);
+tl.to("#tour2", { opacity: 0, duration: 0.3 }, 122.1);
+zoomTo("#z9", [700,40,1220,700], 123);
+rise("#s-res > *", 168.4, 0.15);
+tl.to("#s-res", { opacity: 0, duration: 0.35 }, 173.85);
+rise("#s-end > *", 174.4, 0.15);
+tl.to("#s-end", { opacity: 0, duration: 0.35 }, 176.85);
 
 window.__timelines["main"] = tl;
 tl.seek(0);
