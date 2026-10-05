@@ -17,3 +17,4 @@ festival_agent/web/.vite/
 제출_준비/최종/_영상편집/node_modules/
 제출_준비/최종/_영상편집/src_v1/
 __pycache__/
+*.pptx.bak
